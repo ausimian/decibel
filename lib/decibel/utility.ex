@@ -44,8 +44,9 @@ defmodule Decibel.Utility do
 
   @spec has_premessage_keys(:ini | :rsp, list(), map()) :: boolean
   def has_premessage_keys(_, [], _), do: true
-  def has_premessage_keys(_, msgs, []), do: length(msgs) == 0
+  def has_premessage_keys(_, msgs, []), do: msgs == []
   def has_premessage_keys(role, [{_, []} | msgs], keys), do: has_premessage_keys(role, msgs, keys)
+
   def has_premessage_keys(role, [{sender, [token | tokens]} | msgs], keys)
       when role in [:ini, :rsp] and sender in [:ini, :rsp] do
     reqd =

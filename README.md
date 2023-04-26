@@ -9,7 +9,7 @@ The package can be installed by adding `decibel` to your list of dependencies in
 ```elixir
 def deps do
   [
-    {:decibel, "~> 0.1.0"}
+    {:decibel, "~> 0.1.1"}
   ]
 end
 ```
