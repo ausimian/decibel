@@ -77,6 +77,7 @@ defmodule Decibel.Cipher do
     case Crypto.decrypt(type, k, n, aad, ciphertext) do
       plaintext when is_binary(plaintext) ->
         {%__MODULE__{cipher | n: n + 1}, plaintext}
+
       :error ->
         raise "Decryption failed"
     end

@@ -39,4 +39,12 @@ defmodule Decibel.ChannelPair do
   def rekey(%__MODULE__{out: cout} = state, :out) do
     %__MODULE__{state | out: Cipher.rekey(cout)}
   end
+
+  @spec get_n(__MODULE__.t(), :in | :out) :: non_neg_integer()
+  def get_n(%__MODULE__{in: %Cipher{n: n}}, :in), do: n
+  def get_n(%__MODULE__{out: %Cipher{n: n}}, :out), do: n
+
+  @spec set_n(__MODULE__.t(), :in | :out, non_neg_integer()) :: __MODULE__.t()
+  def set_n(%__MODULE__{in: cin} = state, :in, n), do: %__MODULE__{state | in: %Cipher{cin | n: n}}
+  def set_n(%__MODULE__{out: cout} = state, :out, n), do: %__MODULE__{state | out: %Cipher{cout | n: n}}
 end

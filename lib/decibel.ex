@@ -255,4 +255,21 @@ defmodule Decibel do
     Process.put(ref, ChannelPair.rekey(Process.get(ref), dir))
     :ok
   end
+
+  @doc """
+  Get the current `n` value of the specified cipher.
+  """
+  @spec get_n(reference(), :in | :out) :: non_neg_integer
+  def get_n(ref, dir) when is_reference(ref) and dir in [:in, :out] do
+    ChannelPair.get_n(Process.get(ref), dir)
+  end
+
+  @doc """
+  Set the current value of `n` for the specified cipher.
+  """
+  @spec set_n(reference(), :in | :out, non_neg_integer()) :: :ok
+  def set_n(ref, dir, n) when is_reference(ref) and dir in [:in, :out] and is_integer(n) and n >= 0 do
+    Process.put(ref, ChannelPair.set_n(Process.get(ref), dir, n))
+    :ok
+  end
 end
