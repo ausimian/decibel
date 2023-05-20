@@ -1,4 +1,4 @@
-defmodule CacophonyTest do
+defmodule VectorTest do
   use ExUnit.Case
 
   describe "cacophony vectors" do
@@ -15,13 +15,57 @@ defmodule CacophonyTest do
     end
   end
 
+  describe "noise-c fallback vectors" do
+    for v <- Jason.decode!(File.read!("test/vectors/noise-c-fallback.json"))["vectors"] do
+      esc = Macro.escape(v)
+      test v["name"], do: run_fallback_test(convert_psks(unquote(esc)))
+    end
+  end
+
+  defp run_fallback_test(%{"fallback" => true, "name" => "Noise_XXfallback_" <> _ = name, "pattern" => "IK"} = vec) do
+    # Fallback tests simulate recovery from a failed handshake using `Noise Pipes`.
+    # In particular, they show how the ephemeral key in the failed IK handshake
+    # is reused by the corresponding XXfallback handshake
+    initial_protocol = String.replace(name, "XXfallback", "IK")
+    initial_vec =
+      vec
+      |> Map.put("protocol_name", initial_protocol)
+      |> Map.delete("fallback")
+    ini = initialize(:ini, initial_vec)
+    rsp = initialize(:rsp, initial_vec)
+
+    # First message should fail decryption by the responder
+    msg = hd(vec["messages"])
+    payload = to_binary(msg["payload"])
+    ciphertext = to_binary(msg["ciphertext"])
+
+    assert ciphertext == IO.iodata_to_binary(encrypt(ini, payload))
+    try do
+      decrypt(rsp, ciphertext)
+      flunk("Handshake should fail")
+    rescue
+      e in Decibel.DecryptionError ->
+        re = e.remote_keys[:re]
+        # Run the fallback protocol using this ephemeral key
+        vec
+        |> Map.put("protocol_name", String.replace(initial_protocol, "Noise_IK", "Noise_XXfallback"))
+        |> Map.delete("init_remote_static")
+        |> Map.update!("messages", &tl/1)
+        |> Map.put("resp_remote_ephemeral", Base.encode16(re, case: :lower))
+        |> run_test
+    end
+  end
+
   defp run_test(vec) when is_map(vec) do
     ini = initialize(:ini, vec)
     rsp = initialize(:rsp, vec)
     oneway = is_oneway?(vec["protocol_name"])
 
+    # If we're running a fallback handshake, the responder goes first
+    {w, r} = if vec["fallback"], do: {rsp, ini}, else: {ini, rsp}
+
     {r1, r2} =
-      Enum.reduce(vec["messages"], {ini, rsp}, fn msg, {writer, reader} ->
+      Enum.reduce(vec["messages"], {w, r}, fn msg, {writer, reader} ->
         payload = to_binary(msg["payload"])
         ciphertext = to_binary(msg["ciphertext"])
 
@@ -64,11 +108,12 @@ defmodule CacophonyTest do
   end
 
   defp initialize(role, vec) do
-    curve = decode_dh(vec["protocol_name"])
+    protocol_name = vec["protocol_name"]
+    curve = decode_dh(protocol_name)
     prefix = if role == :ini, do: "init_", else: "resp_"
 
     keys =
-      for {key, name} <- [e: "ephemeral", s: "static", rs: "remote_static", prologue: "prologue", psks: "psks"],
+      for {key, name} <- [e: "ephemeral", s: "static", rs: "remote_static", re: "remote_ephemeral", prologue: "prologue", psks: "psks"],
           reduce: %{} do
         keys ->
           case Map.get(vec, prefix <> name) do
@@ -83,7 +128,8 @@ defmodule CacophonyTest do
           end
       end
 
-    Decibel.new(vec["protocol_name"], role, keys)
+    opts = if vec["fallback"], do: [swap: :rsp], else: [swap: :ini]
+    Decibel.new(protocol_name, role, keys, opts)
   end
 
   defp is_oneway?(protocol_name) do
@@ -107,4 +153,22 @@ defmodule CacophonyTest do
   defp to_binary(hex_string) do
     Base.decode16!(hex_string, case: :lower)
   end
+
+  defp convert_psks(vec) do
+    # The vectors from noise-c need to be converted to the same form as
+    # cacophony and snow, which means renaming their psk fields and making
+    # their values lists
+    vec
+    |> convert_psk("init_psk")
+    |> convert_psk("resp_psk")
+  end
+
+  defp convert_psk(vec, field) do
+    case Map.pop(vec, field) do
+      {nil, _} -> vec
+      {val, vec2} when is_binary(val) ->
+        Map.put(vec2, field <> "s", [val])
+    end
+  end
+
 end

@@ -52,7 +52,7 @@ defmodule DecibelTest do
     hs1 = Decibel.handshake_encrypt(ini)
     "" = Decibel.handshake_decrypt(rsp, :crypto.strong_rand_bytes(IO.iodata_length(hs1)))
     hs2 = Decibel.handshake_encrypt(rsp)
-    assert_raise RuntimeError, fn -> Decibel.handshake_decrypt(ini, hs2) end
+    assert_raise Decibel.DecryptionError, fn -> Decibel.handshake_decrypt(ini, hs2) end
 
     Decibel.close(ini)
     Decibel.close(rsp)
@@ -69,7 +69,29 @@ defmodule DecibelTest do
 
     plaintext = :crypto.strong_rand_bytes(32_768)
     msg1 = Decibel.encrypt(ini, plaintext, "my random aad")
-    assert_raise RuntimeError, fn -> Decibel.decrypt(rsp, flip_first_two_bytes(msg1), "my random aad") end
+    assert_raise Decibel.DecryptionError, fn -> Decibel.decrypt(rsp, flip_first_two_bytes(msg1), "my random aad") end
+
+    Decibel.close(ini)
+    Decibel.close(rsp)
+  end
+
+  test "Remote keys are available after handshake failure" do
+    ini_s       = :crypto.generate_key(:ecdh, :x25519)
+    ini_e       = :crypto.generate_key(:ecdh, :x25519)
+    {ini_rs, _} = :crypto.generate_key(:ecdh, :x25519)
+    rsp_s       = :crypto.generate_key(:ecdh, :x25519)
+    ini = Decibel.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :ini, %{s: ini_s, e: ini_e, rs: ini_rs})
+    rsp = Decibel.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :rsp, %{s: rsp_s})
+
+    hs1 = Decibel.handshake_encrypt(ini)
+    try do
+      Decibel.handshake_decrypt(rsp, hs1)
+      flunk("Decryption should have failed!")
+    rescue
+      e in Decibel.DecryptionError ->
+        {rsp_re, _} = ini_e
+        assert rsp_re == e.remote_keys[:re]
+    end
 
     Decibel.close(ini)
     Decibel.close(rsp)
@@ -85,7 +107,7 @@ defmodule DecibelTest do
     "" = Decibel.handshake_decrypt(ini, hs2)
 
     # Generate 4 outbound messages
-    assert 0 == Decibel.get_n(ini, :out)
+    assert 0 == Decibel.get_nonce(ini, :out)
     pt0 = :crypto.strong_rand_bytes(1024)
     ct0 = Decibel.encrypt(ini, pt0, <<0::unsigned-little-64>>)
     pt1 = :crypto.strong_rand_bytes(1024)
@@ -96,20 +118,17 @@ defmodule DecibelTest do
     ct3 = Decibel.encrypt(ini, pt3, <<3::unsigned-little-64>>)
 
     # Process them as if the first two messages had arrived out of order
-    assert 0 == Decibel.get_n(rsp, :in)
-    :ok = Decibel.set_n(rsp, :in, 1)
+    assert 0 == Decibel.get_nonce(rsp, :in)
+    :ok = Decibel.set_nonce(rsp, :in, 1)
     assert pt1 == Decibel.decrypt(rsp, ct1, <<1::unsigned-little-64>>)
-    :ok = Decibel.set_n(rsp, :in, 0)
+    :ok = Decibel.set_nonce(rsp, :in, 0)
     assert pt0 == Decibel.decrypt(rsp, ct0, <<0::unsigned-little-64>>)
-    :ok = Decibel.set_n(rsp, :in, 2)
+    :ok = Decibel.set_nonce(rsp, :in, 2)
     assert pt2 == Decibel.decrypt(rsp, ct2, <<2::unsigned-little-64>>)
     assert pt3 == Decibel.decrypt(rsp, ct3, <<3::unsigned-little-64>>)
 
     Decibel.close(ini)
     Decibel.close(rsp)
-  end
-
-  test "Correct role" do
   end
 
   defp flip_first_two_bytes(<<fst, snd, rest::binary>>), do: <<snd, fst, rest::binary>>
