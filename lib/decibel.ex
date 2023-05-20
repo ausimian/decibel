@@ -25,7 +25,9 @@ defmodule Decibel do
 
   Decibel supports all the handshake patterns outlined in r34 of the specification
   including the fundamental patterns, deferred patterns and one-way patterns. It
-  also supports pre-shared keys as outlined in the specification.
+  also supports pre-shared keys as outlined in the specification, and fallback
+  handshakes for [Noise Pipes](http://www.noiseprotocol.org/noise.html#noise-pipes)
+  support.
 
   ## Example
 
@@ -123,7 +125,90 @@ defmodule Decibel do
   Once the session is complete, each party should call `close/1` to free the
   resources associated with the it.
 
+  ## Noise Pipes
+
+  [Noise Pipes](http://www.noiseprotocol.org/noise.html#noise-pipes) are compound protocols
+  combining:
+
+  - A full handshake (e.g. `XX`)
+  - A zero-RTT handshake (e.g. `IK`)
+  - A fallback handshake (e.g. `XXfallback`)
+
+  The specification provides more detail on Noise Pipes, as does the
+  [Wiki](https://github.com/noiseprotocol/noise_wiki/wiki/Test-vectors#noise-pipes).
+  Decibel provides support for all these individual protocols and the necessary
+  information to transition between a failed IK handshake and the fallback.
+
+  ### Decryption Errors
+
+  If an AEAD decryption failure occurs, a `Decibel.DecryptionError` is raised.
+  Additionally if this error occurs during a handshake, the error's `:remote_keys`
+  property will contain any remote public keys processed during the handshake, up
+  to the point of failure.
+
+  ### Example
+
+  The following example shows a responder handling the decryption failure, and then
+  transitioning to the fallback protocol, using the remote ephemeral key, via
+  `Noise_XXfallback_25519_ChaChaPoly_Blake2b`.
+
+  ```elixir
+  # Process IK handshake message sent by the initiator
+  try do
+    _ = Decibel.handshake_decrypt(rsp, ciphertext)
+    # Happy path continues here...
+  rescue
+    e in Decibel.DecryptionError ->
+      # Grab the remote ephemeral key sent by the initiator during the failed
+      # handshake
+      re = e.remote_keys[:re]
+      # Now construct the new responder for the fallback protocol
+      rsp = Decibel.new("Noise_XXfallback_25519_ChaChaPoly_Blake2b", :rsp, %{re: re}, swap: :rsp)
+      # Start the new handshake (not shown) ...
+  end
+  ```
+
+  Note that although the code reconstructs the responder, as the handshake is a fallback
+  protocol, the code is _effectively_ the initiator, and will send the first message on
+  this new handshake.
+
+  - The retrievel of the remote ephemeral (`re`) key from the error
+  - The prepopulation of that key in the responder's new handshake (other keys omitted
+    for brevity)
+  - The use of the `[swap: :rsp]` option - this is required to ensure the split cipher
+    channels are correctly paired after the handshake.
+
+  ## Connectionless Transports
+
+  Once the handshake completes, Noise provides support for the encryption and decryption
+  of messages over connectionless i.e. potentially _unordered_, potentially _lossy_
+  transports, and Decibel honours this support.
+
+  This example shows how to send data over such a transport:
+
+  ```elixir
+  # First, grab the nonce for the outbound channel
+  n = Decibel.get_nonce(ref, :out)
+  # Encrypt the data
+  ciphertext = Decibel.encrypt(ref, plaintext, aad)
+  # Send both the nonce and the ciphertext
+  send(peer, {n, ciphertext})
+  ```
+
+  The receiving side is as follows:
+
+  ```elixir
+  # Receive the message
+  {n, ciphertext} = get_msg_from(peer)
+  # Set the nonce for the inbound channel using the received n
+  :ok = Decibel.set_nonce(ref, :in, n)
+  # Decrypt the ciphertext
+  plaintext = Decibel.decrypt(ref, ciphertext, aad)
+  ```
+
   """
+
+
 
   @typedoc "The role the party plays in the protocol."
   @type role :: :ini | :rsp
@@ -177,8 +262,8 @@ defmodule Decibel do
   Decrypt an inbound handshake message, returning any optionally provided application
   data.
 
-  The function will raise a `RuntimeException` if the handshake data does not decrypt
-  correctly.
+  The function will raise a `Decibel.DecryptionError` if the handshake data does not
+  decrypt correctly.
   """
   @spec handshake_decrypt(reference(), iodata()) :: iodata()
   def handshake_decrypt(ref, ciphertext) when is_reference(ref) do
@@ -257,18 +342,18 @@ defmodule Decibel do
   end
 
   @doc """
-  Get the current `n` value of the specified cipher.
+  Get the current nonce value of the specified cipher.
   """
-  @spec get_n(reference(), :in | :out) :: non_neg_integer
-  def get_n(ref, dir) when is_reference(ref) and dir in [:in, :out] do
+  @spec get_nonce(reference(), :in | :out) :: non_neg_integer
+  def get_nonce(ref, dir) when is_reference(ref) and dir in [:in, :out] do
     ChannelPair.get_n(Process.get(ref), dir)
   end
 
   @doc """
-  Set the current value of `n` for the specified cipher.
+  Set the current value of nonce for the specified cipher.
   """
-  @spec set_n(reference(), :in | :out, non_neg_integer()) :: :ok
-  def set_n(ref, dir, n) when is_reference(ref) and dir in [:in, :out] and is_integer(n) and n >= 0 do
+  @spec set_nonce(reference(), :in | :out, non_neg_integer()) :: :ok
+  def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] and is_integer(n) and n >= 0 do
     Process.put(ref, ChannelPair.set_n(Process.get(ref), dir, n))
     :ok
   end

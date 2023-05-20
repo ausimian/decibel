@@ -4,12 +4,16 @@ defmodule Decibel.MixProject do
   def project do
     [
       app: :decibel,
-      version: "0.1.1",
+      version: "0.2.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       package: package(),
-      source_url: "https://github.com/ausimian/decibel"
+      source_url: "https://github.com/ausimian/decibel",
+      docs: [
+        main: "Decibel",
+        extras: ["CHANGELOG.md"]
+      ]
     ]
   end
 
@@ -38,7 +42,8 @@ defmodule Decibel.MixProject do
       description: "An Elixir implementation of the Noise Protocol Framework.",
       licenses: ["MIT"],
       links: %{
-        "GitHub" => "https://github.com/ausimian/decibel"
+        "GitHub" => "https://github.com/ausimian/decibel",
+        "Noise Protocol Framework" => "https://noiseprotocol.org/index.html"
       }
     ]
   end

@@ -79,7 +79,7 @@ defmodule Decibel.Cipher do
         {%__MODULE__{cipher | n: n + 1}, plaintext}
 
       :error ->
-        raise "Decryption failed"
+        raise Decibel.DecryptionError
     end
   end
 end
