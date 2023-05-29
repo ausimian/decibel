@@ -8,6 +8,13 @@ defmodule VectorTest do
     end
   end
 
+  describe "cacophony psk vectors" do
+    for v <- Jason.decode!(File.read!("test/vectors/cacophony-psk.json"))["vectors"] do
+      esc = Macro.escape(v)
+      test v["protocol_name"], do: run_test(unquote(esc))
+    end
+  end
+
   describe "snow vectors" do
     for v <- Jason.decode!(File.read!("test/vectors/snow.json"))["vectors"] do
       esc = Macro.escape(v)
