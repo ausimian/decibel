@@ -213,7 +213,7 @@ defmodule Decibel do
   @typedoc "The role the party plays in the protocol."
   @type role :: :ini | :rsp
 
-  alias Decibel.{Handshake, ChannelPair}
+  alias Decibel.{Handshake, ChannelPair, Crypto}
 
   @doc """
   Start a new handshake.
@@ -356,5 +356,17 @@ defmodule Decibel do
   def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] and is_integer(n) and n >= 0 do
     Process.put(ref, ChannelPair.set_n(Process.get(ref), dir, n))
     :ok
+  end
+
+  @doc """
+  """
+  @spec get_public_key(reference, :e | :re | :rs | :s) :: nil | Crypto.public_key()
+  def get_public_key(ref, key) when is_reference(ref) and key in [:e, :s, :re, :rs] do
+    case Map.get(Process.get(ref), key) do
+      {public, _} ->
+        public
+      other ->
+        other
+    end
   end
 end

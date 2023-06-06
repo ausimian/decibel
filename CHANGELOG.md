@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - June 6, 2023
+
+- Add `get_public_key/2` to the public API.
+
 ## 0.2.0 - May 19, 2023
 - Breaking change - renamed `set_n/3` and `get_n/2` to `set_nonce/3`
   and `get_nonce/2` respectively
