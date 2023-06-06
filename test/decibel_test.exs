@@ -7,9 +7,7 @@ defmodule DecibelTest do
     rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
 
     hs1 = Decibel.handshake_encrypt(ini)
-    refute is_nil(Decibel.get_public_key(ini, :e))
     "" = Decibel.handshake_decrypt(rsp, hs1)
-    refute is_nil(Decibel.get_public_key(rsp, :re))
     refute Enum.any?([ini, rsp], &Decibel.is_handshake_complete?/1)
 
     hs2 = Decibel.handshake_encrypt(rsp)

@@ -9,11 +9,12 @@ defmodule Decibel.ChannelPair do
     field(:h, binary())
     field(:in, Cipher.t())
     field(:out, Cipher.t())
+    field(:rs, binary() | nil)
   end
 
-  @spec new(<<_::256>>, Decibel.Cipher.t(), Decibel.Cipher.t()) :: __MODULE__.t()
-  def new(<<h::binary>>, %Cipher{} = cin, %Cipher{} = cout) do
-    %__MODULE__{h: h, in: cin, out: cout}
+  @spec new(<<_::256>>, Decibel.Cipher.t(), Decibel.Cipher.t(), binary() | nil) :: __MODULE__.t()
+  def new(<<h::binary>>, %Cipher{} = cin, %Cipher{} = cout, rs) do
+    %__MODULE__{h: h, in: cin, out: cout, rs: rs}
   end
 
   @spec write_message(__MODULE__.t(), iodata(), iodata()) :: {__MODULE__.t(), iodata()}

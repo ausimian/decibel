@@ -169,10 +169,10 @@ defmodule Decibel.Handshake do
     %__MODULE__{state | sym: Symmetric.mix_key_and_hash(sym, psk), psks: psks}
   end
 
-  defp maybe_split(%__MODULE__{hs: hs, sym: sym, buf: buf, role: role, swap: swap} = state) do
+  defp maybe_split(%__MODULE__{hs: hs, sym: sym, buf: buf, role: role, swap: swap, rs: rs} = state) do
     case hs do
       [] ->
-        {Symmetric.split(sym, role === swap), buf}
+        {Symmetric.split(sym, role === swap, rs), buf}
 
       _ ->
         {%__MODULE__{state | buf: []}, buf}

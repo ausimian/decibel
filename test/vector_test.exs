@@ -94,6 +94,13 @@ defmodule VectorTest do
       end
     end
 
+    case Decibel.Utility.parse_protocol_name(vec["protocol_name"]) do
+      {{"XK", _}, _, _, _} ->
+        assert Decibel.get_remote_key(r2)
+      _ ->
+        :ok
+    end
+
     Decibel.close(r1)
     Decibel.close(r2)
   end

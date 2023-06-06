@@ -65,16 +65,16 @@ defmodule Decibel.Symmetric do
     {%__MODULE__{sym | h: mix_hash(hf, h, ciphertext), cs: cs}, plaintext}
   end
 
-  @spec split(__MODULE__.t(), boolean()) :: ChannelPair.t()
-  def split(%__MODULE__{cs: cs, ck: ck, hf: hf, h: h}, swap) do
+  @spec split(__MODULE__.t(), boolean(), binary()) :: ChannelPair.t()
+  def split(%__MODULE__{cs: cs, ck: ck, hf: hf, h: h}, swap, rs) do
     {<<k1::32-bytes, _::binary>>, <<k2::32-bytes, _::binary>>} = Crypto.hkdf(hf, ck, <<>>, 2)
     cout = Cipher.initialize_key(cs, k1)
     cin = Cipher.initialize_key(cs, k2)
 
     if swap do
-      ChannelPair.new(h, cin, cout)
+      ChannelPair.new(h, cin, cout, rs)
     else
-      ChannelPair.new(h, cout, cin)
+      ChannelPair.new(h, cout, cin, rs)
     end
   end
 

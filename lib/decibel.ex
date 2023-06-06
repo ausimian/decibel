@@ -359,14 +359,10 @@ defmodule Decibel do
   end
 
   @doc """
+  Get the remote (static) key if available.
   """
-  @spec get_public_key(reference, :e | :re | :rs | :s) :: nil | Crypto.public_key()
-  def get_public_key(ref, key) when is_reference(ref) and key in [:e, :s, :re, :rs] do
-    case Map.get(Process.get(ref), key) do
-      {public, _} ->
-        public
-      other ->
-        other
-    end
+  @spec get_remote_key(reference) :: nil | binary()
+  def get_remote_key(ref) when is_reference(ref) do
+    Map.get(Process.get(ref), :rs)
   end
 end

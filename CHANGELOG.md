@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.1 - June 6, 2023
+## 0.2.2 - June 6, 2023
+
+- Add `get_remote_key/1` to the public API.
+
+## 0.2.1 - June 6, 2023 (Reverted)
 
 - Add `get_public_key/2` to the public API.
 
