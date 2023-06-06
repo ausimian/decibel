@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 - June 6, 2023
+
+- Fix unused alias warning.
+
 ## 0.2.2 - June 6, 2023
 
 - Add `get_remote_key/1` to the public API.

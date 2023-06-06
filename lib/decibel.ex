@@ -213,7 +213,7 @@ defmodule Decibel do
   @typedoc "The role the party plays in the protocol."
   @type role :: :ini | :rsp
 
-  alias Decibel.{Handshake, ChannelPair, Crypto}
+  alias Decibel.{Handshake, ChannelPair}
 
   @doc """
   Start a new handshake.
