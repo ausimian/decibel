@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 - Jan 22, 2025
+
+- Update deps
+- Fix compiler errors
+
 ## 0.2.3 - June 6, 2023
 
 - Fix unused alias warning.
