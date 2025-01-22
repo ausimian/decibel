@@ -13,7 +13,7 @@ defmodule Decibel.Symmetric do
 
   @doc false
   @spec initialize(Crypto.cipher(), Crypto.hash(), binary()) :: __MODULE__.t()
-  def initialize(cf, hf, <<protocol_name::binary>> = protocol_name)
+  def initialize(cf, hf, <<protocol_name::binary>>)
       when cf in [:chacha20_poly1305, :aes_256_gcm] and hf in [:sha256, :sha512, :blake2s, :blake2b] do
     hlen = Crypto.hash_len(hf)
 

@@ -52,7 +52,7 @@ defmodule Decibel.Crypto do
   for authentication data.
   """
   @spec encrypt(cipher(), <<_::256>>, non_neg_integer(), iodata(), iodata()) :: iolist()
-  def encrypt(cipher, <<key::binary-size(32)>> = key, nonce, aad, plaintext) do
+  def encrypt(cipher, <<key::binary-size(32)>>, nonce, aad, plaintext) do
     iv = cipher_iv(cipher, nonce)
 
     with {crypttext, tag} <- :crypto.crypto_one_time_aead(cipher, key, iv, plaintext, aad, true) do
@@ -68,7 +68,7 @@ defmodule Decibel.Crypto do
   authentication fails, in which case an error is signaled to the caller.
   """
   @spec decrypt(cipher(), <<_::256>>, non_neg_integer(), iodata(), iodata()) :: binary() | :error
-  def decrypt(cipher, <<key::binary-size(32)>> = key, nonce, aad, crypttext) do
+  def decrypt(cipher, <<key::binary-size(32)>>, nonce, aad, crypttext) do
     bytes = IO.iodata_to_binary(crypttext)
     {data, tag} = :erlang.split_binary(bytes, byte_size(bytes) - 16)
     :crypto.crypto_one_time_aead(cipher, key, cipher_iv(cipher, nonce), data, aad, tag, false)
@@ -78,7 +78,7 @@ defmodule Decibel.Crypto do
   Returns a new 32-byte cipher key as a pseudorandom function of `key`
   """
   @spec rekey(cipher(), <<_::256>>) :: <<_::256>>
-  def rekey(cipher, <<key::binary-size(32)>> = key) do
+  def rekey(cipher, <<key::binary-size(32)>>) do
     with [rekeyed, _] <- encrypt(cipher, key, @rekey, <<>>, <<0::256>>) do
       rekeyed
     end
