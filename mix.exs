@@ -31,9 +31,9 @@ defmodule Decibel.MixProject do
       {:dialyxir, ">= 0.0.0", only: [:dev], runtime: false},
       {:doctor, ">= 0.0.0", only: [:dev], runtime: false},
       {:ex_doc, ">= 0.0.0", only: [:dev], runtime: false},
-      {:ex_check, "~> 0.14.0", only: [:dev], runtime: false},
+      {:ex_check, "~> 0.16.0", only: [:dev], runtime: false},
       {:jason, "~> 1.0", only: [:dev, :test]},
-      {:typed_struct, "~> 0.3.0", runtime: false}
+      {:typedstruct, "~> 0.5.0", runtime: false}
     ]
   end
 
