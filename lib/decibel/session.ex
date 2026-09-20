@@ -36,12 +36,16 @@ defmodule Decibel.Session do
   end
 
   @doc false
-  @spec fetch!(term(), atom(), phase() | :any) :: state()
+  @spec fetch!(term(), atom(), phase() | :any) :: {t(), state()}
   def fetch!(session, operation, expected_phase) do
-    session
-    |> validate_handle!()
-    |> fetch_state!()
-    |> validate_phase!(operation, expected_phase)
+    validated = validate_handle!(session)
+
+    state =
+      validated
+      |> fetch_state!()
+      |> validate_phase!(operation, expected_phase)
+
+    {validated, state}
   end
 
   @doc false

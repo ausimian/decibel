@@ -676,7 +676,7 @@ defmodule Decibel do
   """
   @spec handshake_encrypt(session(), iodata()) :: iodata()
   def handshake_encrypt(session, plaintext \\ []) do
-    hs = Session.fetch!(session, :handshake_encrypt, :handshake_write)
+    {session, hs} = Session.fetch!(session, :handshake_encrypt, :handshake_write)
     validate_size!(plaintext, @max_message_size, "handshake plaintext")
     {hs, ciphertext} = Handshake.write_message(hs, plaintext)
     validate_size!(ciphertext, @max_message_size, "handshake message")
@@ -703,7 +703,7 @@ defmodule Decibel do
   """
   @spec handshake_decrypt(session(), iodata()) :: iodata()
   def handshake_decrypt(session, ciphertext) do
-    hs = Session.fetch!(session, :handshake_decrypt, :handshake_read)
+    {session, hs} = Session.fetch!(session, :handshake_decrypt, :handshake_read)
     validate_size!(ciphertext, @max_message_size, "handshake message")
     {hs, plaintext} = Handshake.read_message(hs, ciphertext)
     Session.store!(session, hs)
@@ -719,8 +719,8 @@ defmodule Decibel do
   @spec handshake_complete?(session()) :: boolean()
   def handshake_complete?(session) do
     case Session.fetch!(session, :handshake_complete?, :any) do
-      %Handshake{} -> false
-      %ChannelPair{} -> true
+      {_session, %Handshake{}} -> false
+      {_session, %ChannelPair{}} -> true
     end
   end
 
@@ -746,8 +746,8 @@ defmodule Decibel do
   @spec handshake_hash(session()) :: handshake_hash() | nil
   def handshake_hash(session) do
     case Session.fetch!(session, :handshake_hash, :any) do
-      %Handshake{} -> nil
-      %ChannelPair{} = cp -> ChannelPair.get_hash(cp)
+      {_session, %Handshake{}} -> nil
+      {_session, %ChannelPair{} = cp} -> ChannelPair.get_hash(cp)
     end
   end
 
@@ -784,7 +784,7 @@ defmodule Decibel do
   """
   @spec encrypt(session(), iodata(), iodata()) :: iodata()
   def encrypt(session, plaintext, ad \\ []) do
-    channel_pair = Session.fetch!(session, :encrypt, :transport)
+    {session, channel_pair} = Session.fetch!(session, :encrypt, :transport)
     validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
     {channel_pair, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
     Session.store!(session, channel_pair)
@@ -813,7 +813,7 @@ defmodule Decibel do
   """
   @spec decrypt(session(), iodata(), iodata()) :: iodata()
   def decrypt(session, ciphertext, ad \\ []) do
-    channel_pair = Session.fetch!(session, :decrypt, :transport)
+    {session, channel_pair} = Session.fetch!(session, :decrypt, :transport)
     validate_size!(ciphertext, @max_message_size, "transport message")
     {channel_pair, plaintext} = ChannelPair.read_message(channel_pair, ad, ciphertext)
     Session.store!(session, channel_pair)
@@ -859,7 +859,7 @@ defmodule Decibel do
   """
   @spec rekey(session(), :in | :out) :: :ok
   def rekey(session, dir) do
-    channel_pair = Session.fetch!(session, :rekey, :transport)
+    {session, channel_pair} = Session.fetch!(session, :rekey, :transport)
     validate_direction!(dir)
     Session.store!(session, ChannelPair.rekey(channel_pair, dir))
     :ok
@@ -886,7 +886,7 @@ defmodule Decibel do
   """
   @spec nonce(session(), :in | :out) :: nonce()
   def nonce(session, dir) do
-    channel_pair = Session.fetch!(session, :nonce, :transport)
+    {_session, channel_pair} = Session.fetch!(session, :nonce, :transport)
     validate_direction!(dir)
     ChannelPair.get_n(channel_pair, dir)
   end
@@ -935,7 +935,7 @@ defmodule Decibel do
   """
   @spec set_nonce(session(), :in | :out, usable_nonce()) :: :ok
   def set_nonce(session, dir, n) do
-    channel_pair = Session.fetch!(session, :set_nonce, :transport)
+    {session, channel_pair} = Session.fetch!(session, :set_nonce, :transport)
     validate_direction!(dir)
     Session.store!(session, ChannelPair.set_n(channel_pair, dir, n))
     :ok
@@ -953,9 +953,8 @@ defmodule Decibel do
   """
   @spec remote_key(session()) :: nil | binary()
   def remote_key(session) do
-    session
-    |> Session.fetch!(:remote_key, :any)
-    |> Map.get(:rs)
+    {_session, state} = Session.fetch!(session, :remote_key, :any)
+    Map.get(state, :rs)
   end
 
   @doc """

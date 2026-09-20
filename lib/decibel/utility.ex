@@ -186,6 +186,7 @@ defmodule Decibel.Utility do
     end)
   end
 
+  @spec invalid_psk_index!(non_neg_integer()) :: no_return()
   defp invalid_psk_index!(n) do
     invalid_protocol_name!("psk#{n} does not reference a handshake message")
   end
