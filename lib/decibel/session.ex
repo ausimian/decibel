@@ -16,6 +16,7 @@ defmodule Decibel.Session do
   alias Decibel.{ChannelPair, Handshake, SessionError}
 
   @closed :closed
+  @issuance_key {__MODULE__, :issuance_key}
   @missing :missing
 
   @enforce_keys [:owner, :id, :proof]
@@ -24,7 +25,7 @@ defmodule Decibel.Session do
   @opaque t :: %__MODULE__{
             owner: pid(),
             id: reference(),
-            proof: (pid(), reference() -> boolean())
+            proof: binary()
           }
 
   @type phase :: SessionError.phase()
@@ -66,7 +67,7 @@ defmodule Decibel.Session do
   end
 
   defp validate_handle!(%__MODULE__{owner: owner, id: id, proof: proof} = session)
-       when is_pid(owner) and is_reference(id) and is_function(proof, 2) do
+       when is_pid(owner) and is_reference(id) and is_binary(proof) do
     if issued?(proof, owner, id) do
       if owner == self() do
         session
@@ -111,19 +112,33 @@ defmodule Decibel.Session do
     if role == next_role, do: :handshake_write, else: :handshake_read
   end
 
-  defp issuance_proof(owner, id) do
-    fn candidate_owner, candidate_id ->
-      candidate_owner == owner and candidate_id == id
+  defp issuance_proof(owner, id),
+    do: :crypto.mac(:hmac, :sha256, issuance_key(), :erlang.term_to_binary({owner, id}))
+
+  defp issued?(proof, owner, id) do
+    expected = issuance_proof(owner, id)
+    byte_size(proof) == byte_size(expected) and :crypto.hash_equals(proof, expected)
+  end
+
+  defp issuance_key do
+    case :persistent_term.get(@issuance_key, @missing) do
+      @missing -> initialize_issuance_key()
+      key -> key
     end
   end
 
-  defp issued?(proof, owner, id) do
-    with {:module, __MODULE__} <- :erlang.fun_info(proof, :module),
-         {:type, :local} <- :erlang.fun_info(proof, :type) do
-      proof.(owner, id)
-    else
-      _other -> false
-    end
+  defp initialize_issuance_key do
+    :global.trans({@issuance_key, self()}, fn ->
+      case :persistent_term.get(@issuance_key, @missing) do
+        @missing ->
+          key = :crypto.strong_rand_bytes(32)
+          :persistent_term.put(@issuance_key, key)
+          key
+
+        key ->
+          key
+      end
+    end)
   end
 
   defp storage_key(%__MODULE__{id: id}), do: {__MODULE__, id}

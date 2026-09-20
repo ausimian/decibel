@@ -61,7 +61,7 @@ defmodule Decibel.SessionTest do
       assert_session_error(call, :unknown, "Unknown Decibel session")
     end
 
-    invalid_proof = fn _owner, _id -> true end
+    invalid_proof = :crypto.strong_rand_bytes(32)
 
     never_issued =
       struct!(Session, owner: self(), id: make_ref(), proof: invalid_proof)
