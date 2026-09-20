@@ -9,6 +9,9 @@
 
 ### Changed
 
+- Gate releases on warning-free Dialyzer and documentation builds, an exact
+  Hex package manifest, at least 97% line coverage, and dependency retirement
+  and security-advisory audits.
 - **Breaking:** Finalize the 1.0 session API with idiomatic
   `handshake_complete?/1`, `handshake_hash/1`, `nonce/2`, and `remote_key/1`
   accessors. The 0.2 names remain deprecated for the 1.0 compatibility release
