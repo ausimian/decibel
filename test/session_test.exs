@@ -118,6 +118,13 @@ defmodule Decibel.SessionTest do
     for {_operation, call} <- all_operations(session) do
       assert_session_error(call, :closed, "Session is closed")
     end
+
+    task =
+      Task.async(fn ->
+        capture_session_error(fn -> Decibel.get_handshake_hash(session) end)
+      end)
+
+    assert %SessionError{reason: :not_owner} = Task.await(task)
   end
 
   test "closing a transport session rejects every later operation" do

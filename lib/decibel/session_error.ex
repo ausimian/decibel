@@ -5,18 +5,18 @@ defmodule Decibel.SessionError do
   The `:reason` field is the stable machine-readable failure contract:
 
   - `:not_owner` means a genuine session handle was used outside the process
-    that created it.
-  - `:closed` means the owner has already closed the session.
+    that created it, whether the session is live or closed.
+  - `:closed` means the owner tried to use a session it has already closed.
   - `:unknown` means the value is not a known session handle. Legacy bare
     references from Decibel 0.2 and all other terms use this reason.
   - `:wrong_phase` means the session is live, but the operation is not valid for
     the current handshake turn or transport phase.
 
   A genuine handle used in another process reports `:not_owner`, not
-  `:unknown`, so ownership mistakes remain distinct from migration mistakes.
-  For `:wrong_phase`, `:operation`, `:expected_phase`, and `:actual_phase`
-  identify the rejected transition. Those fields are `nil` for all other
-  reasons.
+  `:unknown` or `:closed`, so ownership mistakes remain distinct from migration
+  and lifecycle mistakes. For `:wrong_phase`, `:operation`, `:expected_phase`,
+  and `:actual_phase` identify the rejected transition. Those fields are `nil`
+  for all other reasons.
   """
 
   @typedoc "The phase or handshake turn of a live session."

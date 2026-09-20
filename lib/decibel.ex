@@ -246,10 +246,10 @@ defmodule Decibel do
   establish a new session; the old one cannot be recovered or transferred.
 
   Decibel does not support session ownership transfer. Using a genuine handle
-  in another process raises `Decibel.SessionError` with `reason: :not_owner`.
-  A legacy bare reference or another unknown value uses `reason: :unknown`.
-  After `close/1`, every operation, including another close, uses
-  `reason: :closed`.
+  in another process raises `Decibel.SessionError` with `reason: :not_owner`,
+  including when the owner has already closed it. A legacy bare reference or
+  another unknown value uses `reason: :unknown`. After `close/1`, every
+  operation by the owner, including another close, uses `reason: :closed`.
 
   During a live handshake, only the operation for the next pattern message is
   permitted. `handshake_encrypt/2` requires the `:handshake_write` phase and
