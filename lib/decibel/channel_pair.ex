@@ -6,14 +6,15 @@ defmodule Decibel.ChannelPair do
   @type mode :: :interactive | :one_way
 
   typedstruct do
-    field(:h, binary())
+    field(:h, Decibel.handshake_hash())
     field(:mode, mode())
     field(:in, Cipher.t() | nil)
     field(:out, Cipher.t() | nil)
     field(:rs, binary() | nil)
   end
 
-  @spec new(<<_::256>>, mode(), Cipher.t() | nil, Cipher.t() | nil, binary() | nil) :: __MODULE__.t()
+  @spec new(Decibel.handshake_hash(), mode(), Cipher.t() | nil, Cipher.t() | nil, binary() | nil) ::
+          __MODULE__.t()
   def new(<<h::binary>>, mode, cin, cout, rs) when mode in [:interactive, :one_way] do
     %__MODULE__{h: h, mode: mode, in: cin, out: cout, rs: rs}
   end
@@ -34,7 +35,7 @@ defmodule Decibel.ChannelPair do
     {%__MODULE__{state | in: updated}, plaintext}
   end
 
-  @spec get_hash(__MODULE__.t()) :: binary()
+  @spec get_hash(__MODULE__.t()) :: Decibel.handshake_hash()
   def get_hash(%__MODULE__{h: h}), do: h
 
   @spec rekey(__MODULE__.t(), :in | :out) :: __MODULE__.t()
@@ -50,13 +51,13 @@ defmodule Decibel.ChannelPair do
     %__MODULE__{state | out: Cipher.rekey(cout)}
   end
 
-  @spec get_n(__MODULE__.t(), :in | :out) :: Cipher.nonce()
+  @spec get_n(__MODULE__.t(), :in | :out) :: Decibel.nonce()
   def get_n(%__MODULE__{in: nil}, :in), do: raise_direction_error(:in)
   def get_n(%__MODULE__{in: %Cipher{n: n}}, :in), do: n
   def get_n(%__MODULE__{out: nil}, :out), do: raise_direction_error(:out)
   def get_n(%__MODULE__{out: %Cipher{n: n}}, :out), do: n
 
-  @spec set_n(__MODULE__.t(), :in | :out, Cipher.usable_nonce()) :: __MODULE__.t()
+  @spec set_n(__MODULE__.t(), :in | :out, Decibel.usable_nonce()) :: __MODULE__.t()
   def set_n(%__MODULE__{in: nil}, :in, _n), do: raise_direction_error(:in)
 
   def set_n(%__MODULE__{in: %Cipher{} = cin} = state, :in, n) do

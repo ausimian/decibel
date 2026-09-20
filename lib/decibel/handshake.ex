@@ -7,26 +7,31 @@ defmodule Decibel.Handshake do
   @invalid_psks "pre-shared keys must contain exactly one 32-byte key per psk modifier"
 
   @type initialization_mode :: :safe | :unsafe_test_ephemeral
-  @type keypair :: {Crypto.public_key(), Crypto.private_key()}
 
   typedstruct do
     field(:role, Decibel.role())
     field(:sym, Symmetric.t())
     field(:dh, Crypto.curve())
-    field(:s, nil | Crypto.private_key(), default: nil)
+    field(:s, Decibel.keypair() | nil, default: nil)
     field(:rs, nil | Crypto.public_key(), default: nil)
-    field(:e, nil | keypair(), default: nil)
-    field(:unsafe_ephemeral, nil | keypair(), default: nil)
+    field(:e, Decibel.keypair() | nil, default: nil)
+    field(:unsafe_ephemeral, Decibel.keypair() | nil, default: nil)
     field(:re, nil | Crypto.public_key(), default: nil)
     field(:psks, [<<_::256>>], default: [])
     field(:pskf, boolean(), default: false)
-    field(:hs, list(), default: [])
+    field(:hs, [Utility.handshake_message()], default: [])
     field(:buf, iodata(), default: [])
     field(:swap, Decibel.role())
     field(:mode, ChannelPair.mode())
   end
 
-  @spec initialize(String.t(), Decibel.role(), map, Keyword.t(), initialization_mode()) :: __MODULE__.t()
+  @spec initialize(
+          String.t(),
+          Decibel.role(),
+          Decibel.key_material(),
+          Keyword.t(),
+          initialization_mode()
+        ) :: __MODULE__.t()
   def initialize(<<protocol_name::binary>>, role, keys \\ %{}, opts \\ [], mode \\ :safe)
       when role in [:ini, :rsp] and is_map(keys) and mode in [:safe, :unsafe_test_ephemeral] do
     # Parse the protocol name to get the constituent parts

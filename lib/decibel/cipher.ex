@@ -6,13 +6,10 @@ defmodule Decibel.Cipher do
   @reserved_nonce 2 ** 64 - 1
   @final_usable_nonce @reserved_nonce - 1
 
-  @type nonce :: 0..18_446_744_073_709_551_615
-  @type usable_nonce :: 0..18_446_744_073_709_551_614
-
   typedstruct do
     field(:type, Crypto.cipher())
     field(:k, nil | binary(), default: nil)
-    field(:n, nonce(), default: 0)
+    field(:n, Decibel.nonce(), default: 0)
   end
 
   @doc """
@@ -42,7 +39,7 @@ defmodule Decibel.Cipher do
   @doc """
   Set the nonce value of the cipher.
   """
-  @spec set_nonce(__MODULE__.t(), usable_nonce()) :: __MODULE__.t()
+  @spec set_nonce(__MODULE__.t(), Decibel.usable_nonce()) :: __MODULE__.t()
   def set_nonce(%__MODULE__{} = cipher, n)
       when is_integer(n) and n >= 0 and n <= @final_usable_nonce do
     %__MODULE__{cipher | n: n}

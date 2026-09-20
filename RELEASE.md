@@ -15,6 +15,9 @@
 
 ### Changed
 
+- Correct handshake-hash, Diffie-Hellman keypair, and nonce types so HexDocs
+  accurately describes 32- and 64-byte hashes and the keys stored during
+  handshakes.
 - Gate releases on warning-free Dialyzer and documentation builds, an exact
   Hex package manifest, at least 97% line coverage, and dependency retirement
   and security-advisory audits.

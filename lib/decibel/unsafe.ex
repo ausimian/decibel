@@ -10,7 +10,7 @@ defmodule Decibel.Unsafe do
   alias Decibel.{Handshake, Session}
 
   @doc false
-  @spec new(String.t(), Decibel.role(), map(), keyword()) :: Decibel.session()
+  @spec new(String.t(), Decibel.role(), Decibel.key_material(), keyword()) :: Decibel.session()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
     protocol_name
     |> Handshake.initialize(role, keys, opts, :unsafe_test_ephemeral)
