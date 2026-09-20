@@ -163,6 +163,9 @@ defmodule Decibel.SessionTest do
 
     refute restarted_issuer == original_issuer
 
+    issuer_probe = Decibel.new(@nn_protocol, :ini)
+    assert :ok == Decibel.close(issuer_probe)
+
     original_keys = Process.whereis(Decibel.SessionKeys)
     assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeys)
 
@@ -170,6 +173,7 @@ defmodule Decibel.SessionTest do
              Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
 
     refute restarted_keys == original_keys
+    assert :ok == await_session_keys(100)
     assert false == Decibel.is_handshake_complete?(session)
     assert :ok == Decibel.close(session)
 
@@ -440,5 +444,18 @@ defmodule Decibel.SessionTest do
     call.()
   rescue
     error in SessionError -> error
+  end
+
+  defp await_session_keys(0), do: flunk("session keys did not recover")
+
+  defp await_session_keys(attempts_left) do
+    case Decibel.SessionKeys.public_key() do
+      {:ok, _public_key} ->
+        :ok
+
+      :error ->
+        Process.sleep(1)
+        await_session_keys(attempts_left - 1)
+    end
   end
 end

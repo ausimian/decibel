@@ -23,8 +23,42 @@ defmodule Decibel.SessionKeys do
 
   @impl true
   def init(:ok) do
-    {public_key, _private_key} = keypair = recover_or_generate_keypair()
     secrets = :ets.new(__MODULE__, [:set, :private])
+
+    if is_nil(Process.whereis(Decibel.SessionIssuer)) do
+      install_keypair(secrets, :crypto.generate_key(:eddsa, :ed25519))
+    else
+      send(self(), :recover_keypair)
+    end
+
+    {:ok, secrets}
+  end
+
+  @impl true
+  def handle_call(:keypair, {caller, _tag}, secrets) do
+    if caller == supervised_child(Decibel.SessionIssuer) do
+      {:reply, lookup_keypair(secrets), secrets}
+    else
+      {:reply, :error, secrets}
+    end
+  end
+
+  @impl true
+  def handle_info(:recover_keypair, secrets) do
+    issuer = supervised_child(Decibel.SessionIssuer)
+
+    case GenServer.call(issuer, :keypair) do
+      {:ok, keypair} ->
+        install_keypair(secrets, keypair)
+
+      :not_ready ->
+        Process.send_after(self(), :recover_keypair, 1)
+    end
+
+    {:noreply, secrets}
+  end
+
+  defp install_keypair(secrets, {public_key, _private_key} = keypair) do
     :ets.insert(secrets, {:keypair, keypair})
 
     table =
@@ -36,26 +70,19 @@ defmodule Decibel.SessionKeys do
       ])
 
     :ets.insert(table, {:public_key, public_key})
-    {:ok, secrets}
   end
 
-  @impl true
-  def handle_call(:keypair, {caller, _tag}, secrets) do
-    if caller == Process.whereis(Decibel.SessionIssuer) do
-      {:reply, {:ok, :ets.lookup_element(secrets, :keypair, 2)}, secrets}
-    else
-      {:reply, :error, secrets}
+  defp lookup_keypair(secrets) do
+    case :ets.lookup(secrets, :keypair) do
+      [{:keypair, keypair}] -> {:ok, keypair}
+      [] -> :not_ready
     end
   end
 
-  defp recover_or_generate_keypair do
-    case Process.whereis(Decibel.SessionIssuer) do
-      nil ->
-        :crypto.generate_key(:eddsa, :ed25519)
-
-      _issuer ->
-        {:ok, keypair} = Decibel.SessionIssuer.keypair()
-        keypair
+  defp supervised_child(module) do
+    case List.keyfind(Supervisor.which_children(Decibel.Supervisor), module, 0) do
+      {^module, pid, :worker, _modules} when is_pid(pid) -> pid
+      _other -> nil
     end
   end
 end
