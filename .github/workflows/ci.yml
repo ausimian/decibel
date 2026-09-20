@@ -57,3 +57,98 @@ jobs:
 
       - name: Run quality gates
         run: mix precommit
+
+  dialyzer:
+    name: Dialyzer / Elixir 1.19.5 / OTP 28.3
+    runs-on: ubuntu-latest
+    env:
+      ELIXIR_VERSION: "1.19.5"
+      OTP_VERSION: "28.3"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Restore dependencies, build, and PLT cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            deps
+            _build
+            ~/.mix/dialyxir_erlang-*.plt*
+          key: ${{ runner.os }}-${{ runner.arch }}-dialyzer-elixir-${{ env.ELIXIR_VERSION }}-otp-${{ env.OTP_VERSION }}-mix-${{ hashFiles('mix.lock') }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run Dialyzer
+        run: mix dialyzer --format github
+
+  release-gates:
+    name: Release gates / Elixir 1.19.5 / OTP 28.3
+    runs-on: ubuntu-latest
+    env:
+      ELIXIR_VERSION: "1.19.5"
+      OTP_VERSION: "28.3"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Restore dependencies and build cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.arch }}-release-elixir-${{ env.ELIXIR_VERSION }}-otp-${{ env.OTP_VERSION }}-mix-${{ hashFiles('mix.lock') }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Audit dependencies
+        run: mix hex.audit
+
+      - name: Build and verify Hex package
+        shell: bash
+        run: |
+          package_root="$(mktemp -d)"
+          package_dir="$package_root/decibel"
+          mix hex.build --unpack --output "$package_dir"
+
+          diff -u \
+            <(
+              {
+                find lib -type f -name '*.ex' -print
+                printf '%s\n' \
+                  .formatter.exs \
+                  CHANGELOG.md \
+                  LICENSE \
+                  README.md \
+                  hex_metadata.config \
+                  mix.exs
+              } | sort
+            ) \
+            <(
+              find "$package_dir" -type f -print |
+                sed "s|^$package_dir/||" |
+                sort
+            )
+
+      - name: Build documentation
+        run: mix docs --warnings-as-errors
+
+      - name: Enforce coverage floor
+        run: MIX_ENV=test mix coveralls

@@ -1,0 +1,43 @@
+name: Dependency audit
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Hex dependency audit
+    runs-on: ubuntu-latest
+    env:
+      ELIXIR_VERSION: "1.19.5"
+      OTP_VERSION: "28.3"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Restore dependency cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: deps
+          key: ${{ runner.os }}-${{ runner.arch }}-audit-elixir-${{ env.ELIXIR_VERSION }}-otp-${{ env.OTP_VERSION }}-mix-${{ hashFiles('mix.lock') }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Audit dependencies
+        run: mix hex.audit

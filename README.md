@@ -70,3 +70,10 @@ end
 ```
 
 Documentation can be found at <https://hexdocs.pm/decibel>.
+
+## Development
+
+Run `mix precommit` before committing. Release-focused CI also requires
+warning-free Dialyzer and ExDoc runs, an exact Hex package manifest, clean Hex
+dependency audits, and at least 97% total line coverage;
+`MIX_ENV=test mix coveralls` exits non-zero below that floor.

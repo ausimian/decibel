@@ -58,6 +58,7 @@ defmodule Decibel.MixProject do
   defp package do
     [
       description: "An Elixir implementation of the Noise Protocol Framework.",
+      files: ~w(.formatter.exs CHANGELOG.md LICENSE README.md lib mix.exs),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
