@@ -786,7 +786,7 @@ defmodule DecibelTest do
     Decibel.close(rsp)
   end
 
-  test "Out of order messages" do
+  test "low-level inbound nonce selection supports out-of-order messages" do
     ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
     rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
 
@@ -806,7 +806,8 @@ defmodule DecibelTest do
     pt3 = :crypto.strong_rand_bytes(1024)
     ct3 = Decibel.encrypt(ini, pt3, <<3::unsigned-little-64>>)
 
-    # Process them as if the first two messages had arrived out of order
+    # This exercises the low-level primitive only. Applications must separately
+    # track successfully authenticated nonces and reject replays.
     assert 0 == Decibel.get_nonce(rsp, :in)
     :ok = Decibel.set_nonce(rsp, :in, 1)
     assert pt1 == Decibel.decrypt(rsp, ct1, <<1::unsigned-little-64>>)
