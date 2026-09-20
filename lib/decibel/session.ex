@@ -13,7 +13,7 @@ defmodule Decibel.Session do
   the complete concurrency, supervision, phase, and lifecycle contract.
   """
 
-  alias Decibel.{ChannelPair, Handshake, SessionError, SessionIssuer}
+  alias Decibel.{ChannelPair, Handshake, SessionError, SessionKeys}
 
   @missing :missing
   @status_closed 1
@@ -35,7 +35,7 @@ defmodule Decibel.Session do
   @spec create(state()) :: t()
   def create(state) do
     owner = self()
-    {id, status, proof} = SessionIssuer.issue()
+    {id, status, proof} = SessionKeys.issue()
     session = %__MODULE__{owner: owner, id: id, status: status, proof: proof}
     Process.put(storage_key(session), {status, proof, state})
     session
@@ -103,7 +103,7 @@ defmodule Decibel.Session do
   end
 
   defp issued?(session),
-    do: SessionIssuer.issued?(session.owner, session.id, session.status, session.proof)
+    do: SessionKeys.issued?(session.owner, session.id, session.status, session.proof)
 
   defp fetch_state!(session) do
     case Process.get(storage_key(session), @missing) do

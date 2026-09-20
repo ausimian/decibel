@@ -153,28 +153,23 @@ defmodule Decibel.SessionTest do
 
   test "issued handles survive signing component restarts without serialized validation" do
     session = Decibel.new(@nn_protocol, :ini)
-    original_issuer = Process.whereis(Decibel.SessionIssuer)
+    original_keys = Process.whereis(Decibel.SessionKeys)
 
     on_exit(fn ->
-      for child <- [Decibel.SessionKeys, Decibel.SessionIssuer],
-          is_nil(Process.whereis(child)) do
-        Supervisor.restart_child(Decibel.Supervisor, child)
+      if is_nil(Process.whereis(Decibel.SessionKeys)) do
+        Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
       end
     end)
 
-    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionIssuer)
+    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeys)
     assert IO.iodata_length(Decibel.handshake_encrypt(session)) == 32
 
-    assert {:ok, restarted_issuer} =
-             Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionIssuer)
+    task =
+      Task.async(fn ->
+        capture_session_error(fn -> Decibel.get_handshake_hash(session) end)
+      end)
 
-    refute restarted_issuer == original_issuer
-
-    issuer_probe = Decibel.new(@nn_protocol, :ini)
-    assert :ok == Decibel.close(issuer_probe)
-
-    original_keys = Process.whereis(Decibel.SessionKeys)
-    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeys)
+    assert %SessionError{reason: :not_owner} = Task.await(task)
 
     assert {:ok, restarted_keys} =
              Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
