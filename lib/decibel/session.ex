@@ -76,6 +76,7 @@ defmodule Decibel.Session do
       Process.put(storage_key(session), {status, generation, proof, state})
       state
     else
+      Process.delete(storage_key(session))
       raise SessionError, reason: :unknown
     end
   end
@@ -129,10 +130,18 @@ defmodule Decibel.Session do
   defp validate_owned_entry!(_session, _entry), do: raise(SessionError, reason: :unknown)
 
   defp validate_owned_entry_values!(session, status, generation, proof) do
-    if status == session.status and generation == session.generation and proof == session.proof and
-         SessionKeys.active_generation?(generation) do
+    if status == session.status and generation == session.generation and proof == session.proof do
+      validate_active_generation!(session, generation)
+    else
+      raise SessionError, reason: :unknown
+    end
+  end
+
+  defp validate_active_generation!(session, generation) do
+    if SessionKeys.active_generation?(generation) do
       session
     else
+      Process.delete(storage_key(session))
       raise SessionError, reason: :unknown
     end
   end

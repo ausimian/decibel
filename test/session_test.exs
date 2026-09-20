@@ -160,9 +160,19 @@ defmodule Decibel.SessionTest do
 
     assert :ok == Application.stop(:decibel)
 
-    for {_operation, call} <- all_operations(session) do
-      assert_session_error(call, :unknown, "Unknown Decibel session")
-    end
+    assert_session_error(
+      fn -> Decibel.get_handshake_hash(session) end,
+      :unknown,
+      "Unknown Decibel session"
+    )
+
+    refute Enum.any?(Process.get(), fn
+             {{Session, _id}, _state} -> true
+             {_key, _value} -> false
+           end)
+
+    for {_operation, call} <- all_operations(session),
+        do: assert_session_error(call, :unknown, "Unknown Decibel session")
 
     assert {:ok, _started} = Application.ensure_all_started(:decibel)
 

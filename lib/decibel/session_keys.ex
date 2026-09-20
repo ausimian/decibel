@@ -3,6 +3,7 @@ defmodule Decibel.SessionKeys do
 
   alias Decibel.SessionKeyHeir
 
+  @active_generation {__MODULE__, :active_generation}
   @public_keys :decibel_session_public_keys
 
   @spec child_spec(term()) :: Supervisor.child_spec()
@@ -39,9 +40,25 @@ defmodule Decibel.SessionKeys do
 
   def issued?(_owner, _id, _status, _generation, _proof), do: false
 
+  @doc false
+  @spec activate_generation(reference()) :: :ok
+  def activate_generation(generation) when is_reference(generation) do
+    :persistent_term.put(@active_generation, generation)
+  end
+
+  @doc false
+  @spec deactivate_generation(reference()) :: :ok
+  def deactivate_generation(generation) when is_reference(generation) do
+    if :persistent_term.get(@active_generation, nil) == generation do
+      :persistent_term.erase(@active_generation)
+    end
+
+    :ok
+  end
+
   @spec active_generation?(reference()) :: boolean()
   def active_generation?(generation) when is_reference(generation) do
-    application_started?() and
+    :persistent_term.get(@active_generation, nil) == generation and
       :ets.lookup(@public_keys, :generation) == [{:generation, generation}]
   rescue
     ArgumentError -> false
@@ -60,13 +77,6 @@ defmodule Decibel.SessionKeys do
     end
   rescue
     ArgumentError -> :error
-  end
-
-  defp application_started? do
-    Enum.any?(Application.started_applications(), fn
-      {:decibel, _description, _version} -> true
-      _other -> false
-    end)
   end
 
   defp init(supervisor, generation) do

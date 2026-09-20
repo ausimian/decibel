@@ -12,6 +12,19 @@ defmodule Decibel.Application do
       {Decibel.SessionKeys, generation}
     ]
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: Decibel.Supervisor)
+    case Supervisor.start_link(children, strategy: :one_for_one, name: Decibel.Supervisor) do
+      {:ok, supervisor} ->
+        Decibel.SessionKeys.activate_generation(generation)
+        {:ok, supervisor, generation}
+
+      error ->
+        error
+    end
+  end
+
+  @impl true
+  def stop(generation) do
+    Decibel.SessionKeys.deactivate_generation(generation)
+    :ok
   end
 end
