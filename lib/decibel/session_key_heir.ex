@@ -1,13 +1,27 @@
 defmodule Decibel.SessionKeyHeir do
   @moduledoc false
 
+  @public_keys :decibel_session_public_keys
+
   @spec ensure_started() :: {:ok, pid()}
   def ensure_started do
-    case Process.whereis(__MODULE__) do
-      nil -> start_process()
-      pid -> {:ok, pid}
+    case :ets.whereis(@public_keys) do
+      :undefined ->
+        start()
+
+      public ->
+        owner = :ets.info(public, :owner)
+
+        if is_pid(owner) and Process.alive?(owner) do
+          {:ok, owner}
+        else
+          start()
+        end
     end
   end
+
+  @spec start() :: {:ok, pid()}
+  def start, do: start_process()
 
   defp loop do
     Process.flag(:sensitive, true)
@@ -49,19 +63,13 @@ defmodule Decibel.SessionKeyHeir do
 
     pid =
       spawn(fn ->
-        try do
-          Process.group_leader(self(), Process.whereis(:init))
-          Process.register(self(), __MODULE__)
-          send(parent, {reference, :started, self()})
-          loop()
-        rescue
-          ArgumentError -> send(parent, {reference, :already_started})
-        end
+        Process.group_leader(self(), Process.whereis(:init))
+        send(parent, {reference, :started, self()})
+        loop()
       end)
 
     receive do
       {^reference, :started, ^pid} -> {:ok, pid}
-      {^reference, :already_started} -> ensure_started()
     after
       5_000 -> exit({:timeout, {__MODULE__, :ensure_started}})
     end

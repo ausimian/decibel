@@ -90,7 +90,7 @@ defmodule Decibel.SessionKeys do
   end
 
   defp rebind_heir(tables) do
-    {:ok, heir} = SessionKeyHeir.ensure_started()
+    {:ok, heir} = SessionKeyHeir.start()
 
     if Process.alive?(heir) do
       :ets.setopts(tables.public, {:heir, heir, :public})

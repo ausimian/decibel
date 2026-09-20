@@ -154,7 +154,7 @@ defmodule Decibel.SessionTest do
   test "issued handles survive signing component restarts without serialized validation" do
     session = Decibel.new(@nn_protocol, :ini)
     original_keys = Process.whereis(Decibel.SessionKeys)
-    original_heir = Process.whereis(Decibel.SessionKeyHeir)
+    original_heir = :ets.info(:decibel_session_public_keys, :heir)
 
     on_exit(fn ->
       Application.ensure_all_started(:decibel)
@@ -192,9 +192,9 @@ defmodule Decibel.SessionTest do
     assert :ok == Task.await(creator)
     assert :ok == await_session_keys(100)
 
-    persistent_heir = Process.whereis(Decibel.SessionKeyHeir)
+    persistent_heir = :ets.info(:decibel_session_public_keys, :heir)
     assert :ok == Application.stop(:decibel)
-    assert Process.whereis(Decibel.SessionKeyHeir) == persistent_heir
+    assert :ets.info(:decibel_session_public_keys, :owner) == persistent_heir
 
     stopped_task =
       Task.async(fn ->
@@ -203,7 +203,7 @@ defmodule Decibel.SessionTest do
 
     assert %SessionError{reason: :not_owner} = Task.await(stopped_task)
     assert {:ok, _started} = Application.ensure_all_started(:decibel)
-    assert Process.whereis(Decibel.SessionKeyHeir) == persistent_heir
+    assert :ets.info(:decibel_session_public_keys, :heir) == persistent_heir
     assert :ok == await_session_keys(100)
     assert false == Decibel.is_handshake_complete?(session)
     assert :ok == Decibel.close(session)
@@ -494,14 +494,9 @@ defmodule Decibel.SessionTest do
     do: flunk("session key heir was not replaced")
 
   defp await_replacement_heir(original_heir, attempts_left) do
-    case Process.whereis(Decibel.SessionKeyHeir) do
+    case :ets.info(:decibel_session_public_keys, :heir) do
       heir when is_pid(heir) and heir != original_heir ->
-        if :ets.info(:decibel_session_public_keys, :heir) == heir do
-          {:ok, heir}
-        else
-          Process.sleep(1)
-          await_replacement_heir(original_heir, attempts_left - 1)
-        end
+        {:ok, heir}
 
       _other ->
         Process.sleep(1)
