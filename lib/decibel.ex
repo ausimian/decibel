@@ -20,8 +20,9 @@ defmodule Decibel do
 
   Each party - either the _initiator_ (the party that starts the handshake) or
   _responder_ (the other party) - advances the handshake until it completes, at
-  which point a secure, symmetric channel is established that either party may
-  use to encrypt and decrypt outbound and inbound messages respectively.
+  which point a secure channel is established. Interactive handshakes establish
+  bidirectional transport. The one-way `N`, `K`, and `X` patterns permit only the
+  initiator to encrypt and only the responder to decrypt transport messages.
 
   Decibel supports all the handshake patterns outlined in r34 of the specification
   including the fundamental patterns, deferred patterns and one-way patterns. It
@@ -122,6 +123,12 @@ defmodule Decibel do
   'associated authenticated data' to be specified, that provides message-integrity
   assurance for the application data.
 
+  Interactive handshake patterns allow both parties to encrypt and decrypt
+  transport messages. For the one-way `N`, `K`, and `X` patterns, only the
+  initiator may encrypt and only the responder may decrypt. Reverse-direction
+  transport and cipher-management operations raise
+  `Decibel.TransportDirectionError` without changing session state.
+
   Each call encrypts or decrypts exactly one Noise transport message. Noise messages
   are limited to 65,535 bytes, so transport plaintexts are limited to 65,519 bytes
   after allowing for the 16-byte authentication tag. Applications must split and
@@ -181,13 +188,17 @@ defmodule Decibel do
   - The prepopulation of that key in the responder's new handshake (other keys omitted
     for brevity)
   - The use of the `[swap: :rsp]` option - this is required to ensure the split cipher
-    channels are correctly paired after the handshake.
+    channels are correctly paired after the interactive fallback handshake. The
+    `swap:` option affects only interactive handshakes; it never reverses the
+    permitted direction of a one-way handshake.
 
   ## Connectionless Transports
 
   Once the handshake completes, Noise provides support for the encryption and decryption
   of messages over connectionless i.e. potentially _unordered_, potentially _lossy_
-  transports, and Decibel honours this support.
+  transports, and Decibel honours this support. For one-way patterns, the sender
+  uses only the outbound operations and the recipient uses only the inbound
+  operations shown below.
 
   This example shows how to send data over such a transport:
 
@@ -317,6 +328,8 @@ defmodule Decibel do
 
   Raises `ArgumentError` if `plaintext` exceeds 65,519 bytes, the largest plaintext
   that leaves room for the 16-byte authentication tag within a Noise message.
+  Raises `Decibel.TransportDirectionError` before any state change if outbound
+  transport is not permitted by a one-way handshake.
   """
   @spec encrypt(reference(), iodata(), iodata()) :: iodata()
   def encrypt(ref, plaintext, ad \\ []) do
@@ -332,6 +345,8 @@ defmodule Decibel do
 
   Returns the decrypted message. Raises `Decibel.DecryptionError` if the message
   cannot be decrypted, or `ArgumentError` if it exceeds 65,535 bytes.
+  Raises `Decibel.TransportDirectionError` before any state change if inbound
+  transport is not permitted by a one-way handshake.
   """
   @spec decrypt(reference(), iodata(), iodata()) :: iodata()
   def decrypt(ref, ciphertext, ad \\ []) do
@@ -355,6 +370,9 @@ defmodule Decibel do
 
   @doc """
   Rekey the inbound or outbound channel of the session.
+
+  Raises `Decibel.TransportDirectionError` before any state change if the
+  selected direction is not permitted by a one-way handshake.
   """
   @spec rekey(reference, :in | :out) :: :ok
   def rekey(ref, dir) when is_reference(ref) and dir in [:in, :out] do
@@ -364,6 +382,9 @@ defmodule Decibel do
 
   @doc """
   Get the current nonce value of the specified cipher.
+
+  Raises `Decibel.TransportDirectionError` before any state change if the
+  selected direction is not permitted by a one-way handshake.
   """
   @spec get_nonce(reference(), :in | :out) :: non_neg_integer
   def get_nonce(ref, dir) when is_reference(ref) and dir in [:in, :out] do
@@ -372,6 +393,9 @@ defmodule Decibel do
 
   @doc """
   Set the current value of nonce for the specified cipher.
+
+  Raises `Decibel.TransportDirectionError` before any state change if the
+  selected direction is not permitted by a one-way handshake.
   """
   @spec set_nonce(reference(), :in | :out, non_neg_integer()) :: :ok
   def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] and is_integer(n) and n >= 0 do

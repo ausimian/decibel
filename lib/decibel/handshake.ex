@@ -17,6 +17,7 @@ defmodule Decibel.Handshake do
     field(:hs, list(), default: [])
     field(:buf, iodata(), default: [])
     field(:swap, Decibel.role())
+    field(:mode, ChannelPair.mode())
   end
 
   @spec initialize(String.t(), Decibel.role(), map, Keyword.t()) :: __MODULE__.t()
@@ -57,7 +58,8 @@ defmodule Decibel.Handshake do
       psks: psks,
       pskf: psks != [],
       hs: hs,
-      swap: Keyword.get(opts, :swap, :ini)
+      swap: Keyword.get(opts, :swap, :ini),
+      mode: if(hs_name in ["N", "K", "X"], do: :one_way, else: :interactive)
     }
     |> mix_premessage_public_keys(pre)
   end
@@ -169,10 +171,10 @@ defmodule Decibel.Handshake do
     %__MODULE__{state | sym: Symmetric.mix_key_and_hash(sym, psk), psks: psks}
   end
 
-  defp maybe_split(%__MODULE__{hs: hs, sym: sym, buf: buf, role: role, swap: swap, rs: rs} = state) do
+  defp maybe_split(%__MODULE__{hs: hs, sym: sym, buf: buf, role: role, swap: swap, mode: mode, rs: rs} = state) do
     case hs do
       [] ->
-        {Symmetric.split(sym, role === swap, rs), buf}
+        {Symmetric.split(sym, mode, role, swap, rs), buf}
 
       _ ->
         {%__MODULE__{state | buf: []}, buf}
