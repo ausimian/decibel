@@ -22,6 +22,81 @@ defmodule DecibelTest do
     assert data != msg1
     assert data == Decibel.decrypt(rsp, msg1, "The mess we're in")
 
+    reply = Decibel.encrypt(rsp, "Hello back")
+    assert "Hello back" == Decibel.decrypt(ini, reply)
+
+    Decibel.close(ini)
+    Decibel.close(rsp)
+  end
+
+  for {pattern, cipher} <- [{"N", "AESGCM"}, {"K", "ChaChaPoly"}, {"X", "ChaChaPoly"}] do
+    test "#{pattern} permits only initiator-to-responder transport even when swapped" do
+      pattern = unquote(pattern)
+      cipher = unquote(cipher)
+      {ini, rsp} = establish_one_way_session(pattern, cipher, swap: :rsp)
+
+      assert 0 == Decibel.get_nonce(ini, :out)
+      assert 0 == Decibel.get_nonce(rsp, :in)
+
+      error =
+        assert_raise Decibel.TransportDirectionError,
+                     "Outbound transport is not permitted by this one-way handshake",
+                     fn -> Decibel.encrypt(rsp, "must not be allowed") end
+
+      assert error.direction == :out
+      assert 0 == Decibel.get_nonce(ini, :out)
+      assert 0 == Decibel.get_nonce(rsp, :in)
+
+      ciphertext = Decibel.encrypt(ini, "forward transport")
+      assert "forward transport" == Decibel.decrypt(rsp, ciphertext)
+      assert 1 == Decibel.get_nonce(ini, :out)
+      assert 1 == Decibel.get_nonce(rsp, :in)
+
+      error =
+        assert_raise Decibel.TransportDirectionError,
+                     "Inbound transport is not permitted by this one-way handshake",
+                     fn -> Decibel.decrypt(ini, ciphertext) end
+
+      assert error.direction == :in
+      assert 1 == Decibel.get_nonce(ini, :out)
+      assert 1 == Decibel.get_nonce(rsp, :in)
+
+      Decibel.close(ini)
+      Decibel.close(rsp)
+    end
+  end
+
+  test "one-way sessions reject cipher management for the discarded direction" do
+    {ini, rsp} = establish_one_way_session("N", "ChaChaPoly", swap: :rsp)
+
+    for operation <- [
+          fn -> Decibel.get_nonce(ini, :in) end,
+          fn -> Decibel.set_nonce(ini, :in, 0) end,
+          fn -> Decibel.rekey(ini, :in) end
+        ] do
+      assert_direction_error(:in, operation)
+    end
+
+    for operation <- [
+          fn -> Decibel.get_nonce(rsp, :out) end,
+          fn -> Decibel.set_nonce(rsp, :out, 0) end,
+          fn -> Decibel.rekey(rsp, :out) end
+        ] do
+      assert_direction_error(:out, operation)
+    end
+
+    assert 0 == Decibel.get_nonce(ini, :out)
+    assert 0 == Decibel.get_nonce(rsp, :in)
+    assert :ok == Decibel.set_nonce(ini, :out, 1)
+    assert :ok == Decibel.set_nonce(rsp, :in, 1)
+    assert 1 == Decibel.get_nonce(ini, :out)
+    assert 1 == Decibel.get_nonce(rsp, :in)
+    assert :ok == Decibel.set_nonce(ini, :out, 0)
+    assert :ok == Decibel.set_nonce(rsp, :in, 0)
+    assert :ok == Decibel.rekey(ini, :out)
+    assert :ok == Decibel.rekey(rsp, :in)
+    assert "after rekey" == Decibel.decrypt(rsp, Decibel.encrypt(ini, "after rekey"))
+
     Decibel.close(ini)
     Decibel.close(rsp)
   end
@@ -227,6 +302,47 @@ defmodule DecibelTest do
     |> then(&Decibel.handshake_decrypt(ini, &1))
 
     {ini, rsp}
+  end
+
+  defp establish_one_way_session(pattern, cipher, opts) do
+    {ini_public, _ini_private} = ini_static = :crypto.generate_key(:ecdh, :x25519)
+    {rsp_public, _rsp_private} = rsp_static = :crypto.generate_key(:ecdh, :x25519)
+
+    {ini_keys, rsp_keys} =
+      case pattern do
+        "N" ->
+          {%{rs: rsp_public}, %{s: rsp_static}}
+
+        "K" ->
+          {%{s: ini_static, rs: rsp_public}, %{s: rsp_static, rs: ini_public}}
+
+        "X" ->
+          {%{s: ini_static, rs: rsp_public}, %{s: rsp_static}}
+      end
+
+    protocol = "Noise_#{pattern}_25519_#{cipher}_BLAKE2s"
+    ini = Decibel.new(protocol, :ini, ini_keys, opts)
+    rsp = Decibel.new(protocol, :rsp, rsp_keys, opts)
+
+    ini
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(rsp, &1))
+
+    assert Decibel.is_handshake_complete?(ini)
+    assert Decibel.is_handshake_complete?(rsp)
+
+    {ini, rsp}
+  end
+
+  defp assert_direction_error(direction, operation) do
+    message =
+      case direction do
+        :in -> "Inbound transport is not permitted by this one-way handshake"
+        :out -> "Outbound transport is not permitted by this one-way handshake"
+      end
+
+    error = assert_raise Decibel.TransportDirectionError, message, operation
+    assert error.direction == direction
   end
 
   defp start_nn_handshake do
