@@ -19,13 +19,14 @@ defmodule Decibel.Session do
   @missing :missing
   @status_closed 1
 
-  @enforce_keys [:owner, :id, :status, :proof]
-  defstruct [:owner, :id, :status, :proof]
+  @enforce_keys [:owner, :id, :status, :generation, :proof]
+  defstruct [:owner, :id, :status, :generation, :proof]
 
   @opaque t :: %__MODULE__{
             owner: pid(),
             id: reference(),
             status: reference(),
+            generation: reference(),
             proof: binary()
           }
 
@@ -36,9 +37,17 @@ defmodule Decibel.Session do
   @spec create(state()) :: t()
   def create(state) do
     owner = self()
-    {id, status, proof} = SessionKeys.issue()
-    session = %__MODULE__{owner: owner, id: id, status: status, proof: proof}
-    Process.put(storage_key(session), {status, proof, state})
+    {id, status, generation, proof} = SessionKeys.issue()
+
+    session = %__MODULE__{
+      owner: owner,
+      id: id,
+      status: status,
+      generation: generation,
+      proof: proof
+    }
+
+    Process.put(storage_key(session), {status, generation, proof, state})
     session
   end
 
@@ -53,10 +62,22 @@ defmodule Decibel.Session do
 
   @doc false
   @spec store!(t(), state()) :: state()
-  def store!(%__MODULE__{owner: owner, status: status, proof: proof} = session, state)
+  def store!(
+        %__MODULE__{
+          owner: owner,
+          status: status,
+          generation: generation,
+          proof: proof
+        } = session,
+        state
+      )
       when owner == self() do
-    Process.put(storage_key(session), {status, proof, state})
-    state
+    if SessionKeys.active_generation?(generation) do
+      Process.put(storage_key(session), {status, generation, proof, state})
+      state
+    else
+      raise SessionError, reason: :unknown
+    end
   end
 
   @doc false
@@ -69,8 +90,17 @@ defmodule Decibel.Session do
     :ok
   end
 
-  defp validate_handle!(%__MODULE__{owner: owner, id: id, status: status, proof: proof} = session)
-       when is_pid(owner) and is_reference(id) and is_reference(status) and is_binary(proof) do
+  defp validate_handle!(
+         %__MODULE__{
+           owner: owner,
+           id: id,
+           status: status,
+           generation: generation,
+           proof: proof
+         } = session
+       )
+       when is_pid(owner) and is_reference(id) and is_reference(status) and
+              is_reference(generation) and is_binary(proof) do
     if owner == self() do
       validate_owned_handle!(session)
     else
@@ -82,16 +112,28 @@ defmodule Decibel.Session do
 
   defp validate_owned_handle!(session) do
     case Process.get(storage_key(session), @missing) do
-      {status, proof, state}
-      when status == session.status and proof == session.proof and
-             (is_struct(state, Handshake) or is_struct(state, ChannelPair)) ->
-        session
-
       @missing ->
         if issued?(session), do: session, else: raise(SessionError, reason: :unknown)
 
-      _other ->
-        raise SessionError, reason: :unknown
+      entry ->
+        validate_owned_entry!(session, entry)
+    end
+  end
+
+  defp validate_owned_entry!(session, {status, generation, proof, %Handshake{}}),
+    do: validate_owned_entry_values!(session, status, generation, proof)
+
+  defp validate_owned_entry!(session, {status, generation, proof, %ChannelPair{}}),
+    do: validate_owned_entry_values!(session, status, generation, proof)
+
+  defp validate_owned_entry!(_session, _entry), do: raise(SessionError, reason: :unknown)
+
+  defp validate_owned_entry_values!(session, status, generation, proof) do
+    if status == session.status and generation == session.generation and proof == session.proof and
+         SessionKeys.active_generation?(generation) do
+      session
+    else
+      raise SessionError, reason: :unknown
     end
   end
 
@@ -104,15 +146,23 @@ defmodule Decibel.Session do
   end
 
   defp issued?(session),
-    do: SessionKeys.issued?(session.owner, session.id, session.status, session.proof)
+    do:
+      SessionKeys.issued?(
+        session.owner,
+        session.id,
+        session.status,
+        session.generation,
+        session.proof
+      )
 
   defp fetch_state!(session) do
     case Process.get(storage_key(session), @missing) do
       @missing ->
         raise_missing_state!(session)
 
-      {status, proof, state}
-      when status == session.status and proof == session.proof ->
+      {status, generation, proof, state}
+      when status == session.status and generation == session.generation and
+             proof == session.proof ->
         state
     end
   end

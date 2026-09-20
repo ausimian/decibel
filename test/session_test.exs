@@ -69,6 +69,7 @@ defmodule Decibel.SessionTest do
         owner: self(),
         id: make_ref(),
         status: invalid_status,
+        generation: make_ref(),
         proof: invalid_proof
       )
 
@@ -83,6 +84,7 @@ defmodule Decibel.SessionTest do
         owner: foreign_owner,
         id: make_ref(),
         status: invalid_status,
+        generation: make_ref(),
         proof: invalid_proof
       )
 
@@ -149,6 +151,52 @@ defmodule Decibel.SessionTest do
              {{Session, _id}, _state} -> true
              {_key, _value} -> false
            end)
+  end
+
+  test "stopping the application invalidates sessions retained by their owner" do
+    session = Decibel.new(@nn_protocol, :ini)
+
+    on_exit(fn -> Application.ensure_all_started(:decibel) end)
+
+    assert :ok == Application.stop(:decibel)
+
+    for {_operation, call} <- all_operations(session) do
+      assert_session_error(call, :unknown, "Unknown Decibel session")
+    end
+
+    assert {:ok, _started} = Application.ensure_all_started(:decibel)
+
+    for {_operation, call} <- all_operations(session) do
+      assert_session_error(call, :unknown, "Unknown Decibel session")
+    end
+
+    replacement = Decibel.new(@nn_protocol, :ini)
+    assert :ok == Decibel.close(replacement)
+  end
+
+  test "application startup rejects an untrusted session proof table" do
+    on_exit(fn -> Application.ensure_all_started(:decibel) end)
+
+    assert :ok == Application.stop(:decibel)
+    parent = self()
+
+    {table_owner, monitor} =
+      spawn_monitor(fn ->
+        table = :ets.new(:decibel_session_public_keys, [:named_table, :set, :protected])
+        :ets.insert(table, {:generation, make_ref()})
+        send(parent, {:untrusted_table_ready, self()})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    assert_receive {:untrusted_table_ready, ^table_owner}
+    assert {:error, {:decibel, _reason}} = Application.ensure_all_started(:decibel)
+
+    send(table_owner, :stop)
+    assert_receive {:DOWN, ^monitor, :process, ^table_owner, :normal}
+    assert {:ok, _started} = Application.ensure_all_started(:decibel)
   end
 
   test "issued handles survive signing component restarts without serialized validation" do
@@ -467,14 +515,24 @@ defmodule Decibel.SessionTest do
   defp await_session_keys(0), do: flunk("session keys did not recover")
 
   defp await_session_keys(attempts_left) do
-    case Decibel.SessionKeys.public_key() do
-      {:ok, _public_key} ->
-        :ok
+    case :ets.lookup(:decibel_session_public_keys, :generation) do
+      [{:generation, generation}] ->
+        if Decibel.SessionKeys.active_generation?(generation) do
+          :ok
+        else
+          retry_session_keys(attempts_left)
+        end
 
-      :error ->
-        Process.sleep(1)
-        await_session_keys(attempts_left - 1)
+      _other ->
+        retry_session_keys(attempts_left)
     end
+  rescue
+    ArgumentError -> retry_session_keys(attempts_left)
+  end
+
+  defp retry_session_keys(attempts_left) do
+    Process.sleep(1)
+    await_session_keys(attempts_left - 1)
   end
 
   defp await_replacement_heir(_original_heir, 0),

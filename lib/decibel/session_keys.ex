@@ -15,18 +15,19 @@ defmodule Decibel.SessionKeys do
     }
   end
 
-  @spec start_link(term()) :: {:ok, pid()} | {:error, term()}
-  def start_link(heir), do: start_process(&init(&1, heir))
+  @spec start_link(reference()) :: {:ok, pid()} | {:error, term()}
+  def start_link(generation), do: start_process(&init(&1, generation))
 
-  @spec issue() :: {reference(), reference(), binary()}
+  @spec issue() :: {reference(), reference(), reference(), binary()}
   def issue, do: call(:issue)
 
-  @spec issued?(pid(), reference(), reference(), binary()) :: boolean()
-  def issued?(owner, id, status, proof)
-      when is_pid(owner) and is_reference(id) and is_reference(status) and is_binary(proof) do
-    case public_key() do
+  @spec issued?(pid(), reference(), reference(), reference(), binary()) :: boolean()
+  def issued?(owner, id, status, generation, proof)
+      when is_pid(owner) and is_reference(id) and is_reference(status) and
+             is_reference(generation) and is_binary(proof) do
+    case public_key(generation) do
       {:ok, public_key} ->
-        data = proof_data(owner, id, status)
+        data = proof_data(owner, id, status, generation)
         :crypto.verify(:eddsa, :none, data, proof, [public_key, :ed25519])
 
       :error ->
@@ -36,110 +37,107 @@ defmodule Decibel.SessionKeys do
     ArgumentError -> false
   end
 
-  def issued?(_owner, _id, _status, _proof), do: false
+  def issued?(_owner, _id, _status, _generation, _proof), do: false
 
-  @spec public_key() :: {:ok, binary()} | :error
-  def public_key do
-    case :ets.lookup(@public_keys, :public_key) do
-      [{:public_key, public_key}] -> {:ok, public_key}
-      _other -> :error
+  @spec active_generation?(reference()) :: boolean()
+  def active_generation?(generation) when is_reference(generation) do
+    application_started?() and
+      :ets.lookup(@public_keys, :generation) == [{:generation, generation}]
+  rescue
+    ArgumentError -> false
+  end
+
+  def active_generation?(_generation), do: false
+
+  defp public_key(generation) do
+    if active_generation?(generation) do
+      case :ets.lookup(@public_keys, :public_key) do
+        [{:public_key, public_key}] -> {:ok, public_key}
+        _other -> :error
+      end
+    else
+      :error
     end
   rescue
     ArgumentError -> :error
   end
 
-  defp init(supervisor, heir) do
+  defp application_started? do
+    Enum.any?(Application.started_applications(), fn
+      {:decibel, _description, _version} -> true
+      _other -> false
+    end)
+  end
+
+  defp init(supervisor, generation) do
     Process.flag(:sensitive, true)
     Process.flag(:trap_exit, true)
     send(self(), :initialize)
-    receive_loop(nil, supervisor, heir)
+    receive_loop(nil, supervisor, generation)
   end
 
-  defp receive_loop(tables, supervisor, initial_heir) do
+  defp receive_loop(tables, supervisor, generation) do
     receive do
       :initialize ->
-        receive_loop(initialize_tables(initial_heir), supervisor, initial_heir)
+        receive_loop(initialize_tables(generation), supervisor, generation)
 
       {:issue, caller, reference} when not is_nil(tables) ->
         {_public_key, private_key} = :ets.lookup_element(tables.secrets, :keypair, 2)
         id = make_ref()
         status = :atomics.new(1, signed: false)
-        data = proof_data(caller, id, status)
+        data = proof_data(caller, id, status, generation)
         proof = :crypto.sign(:eddsa, :none, data, [private_key, :ed25519])
-        send(caller, {reference, {id, status, proof}})
-        receive_loop(tables, supervisor, initial_heir)
+        send(caller, {reference, {id, status, generation, proof}})
+        receive_loop(tables, supervisor, generation)
 
       {:issue, caller, reference} ->
         send(caller, {reference, :not_ready})
-        receive_loop(tables, supervisor, initial_heir)
+        receive_loop(tables, supervisor, generation)
 
       {:DOWN, monitor, :process, heir, _reason}
       when not is_nil(tables) and monitor == tables.heir_monitor and heir == tables.heir ->
         rebound = rebind_heir(%{tables | heir: nil, heir_monitor: nil})
-        receive_loop(rebound, supervisor, rebound.heir)
+        receive_loop(rebound, supervisor, generation)
 
       {:EXIT, ^supervisor, reason} ->
         exit(reason)
 
       {:EXIT, _other, _reason} ->
-        receive_loop(tables, supervisor, initial_heir)
+        receive_loop(tables, supervisor, generation)
 
       _other ->
-        receive_loop(tables, supervisor, initial_heir)
+        receive_loop(tables, supervisor, generation)
     end
   end
 
   defp rebind_heir(tables) do
-    {:ok, heir} = SessionKeyHeir.start()
+    case supervised_key_heir() do
+      heir when is_pid(heir) ->
+        :ets.setopts(tables.public, {:heir, heir, :public})
+        :ets.setopts(tables.secrets, {:heir, heir, :secrets})
+        monitor = Process.monitor(heir)
+        %{tables | heir: heir, heir_monitor: monitor}
 
-    if Process.alive?(heir) do
-      :ets.setopts(tables.public, {:heir, heir, :public})
-      :ets.setopts(tables.secrets, {:heir, heir, :secrets})
-      monitor = Process.monitor(heir)
-      %{tables | heir: heir, heir_monitor: monitor}
-    else
-      Process.sleep(1)
-      rebind_heir(tables)
+      nil ->
+        Process.sleep(1)
+        rebind_heir(tables)
     end
   rescue
-    ArgumentError ->
-      Process.sleep(1)
-      rebind_heir(tables)
+    ArgumentError -> exit(:session_key_tables_lost)
   end
 
-  defp initialize_tables(heir) do
-    if Process.alive?(heir) do
-      case :ets.whereis(@public_keys) do
-        :undefined -> create_tables(heir)
-        _public -> reclaim_tables(heir)
-      end
-    else
-      case SessionKeyHeir.ensure_started() do
-        {:ok, replacement} -> initialize_tables(replacement)
-      end
+  defp initialize_tables(generation) do
+    case supervised_key_heir() do
+      heir when is_pid(heir) ->
+        reclaim_tables(heir, generation)
+
+      nil ->
+        Process.sleep(1)
+        initialize_tables(generation)
     end
   end
 
-  defp create_tables(heir) do
-    keypair = {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
-
-    public =
-      :ets.new(@public_keys, [
-        :named_table,
-        :set,
-        :protected,
-        {:read_concurrency, true},
-        {:heir, heir, :public}
-      ])
-
-    secrets = :ets.new(__MODULE__, [:set, :private, {:heir, heir, :secrets}])
-    :ets.insert(public, {:public_key, public_key})
-    :ets.insert(secrets, {:keypair, keypair})
-    monitor = Process.monitor(heir)
-    %{public: public, secrets: secrets, heir: heir, heir_monitor: monitor}
-  end
-
-  defp reclaim_tables(heir) do
+  defp reclaim_tables(heir, generation) do
     reference = make_ref()
     send(heir, {:reclaim, self(), reference})
 
@@ -155,15 +153,29 @@ defmodule Decibel.SessionKeys do
 
         :ets.setopts(public, {:heir, heir, :public})
         :ets.setopts(secrets, {:heir, heir, :secrets})
+
+        unless :ets.lookup(public, :generation) == [{:generation, generation}] do
+          exit(:session_key_generation_mismatch)
+        end
+
         monitor = Process.monitor(heir)
         %{public: public, secrets: secrets, heir: heir, heir_monitor: monitor}
 
       {^reference, :error} ->
         Process.sleep(1)
-        reclaim_tables(heir)
+        reclaim_tables(heir, generation)
     after
       5_000 -> exit(:reclaim_timeout)
     end
+  end
+
+  defp supervised_key_heir do
+    case List.keyfind(Supervisor.which_children(Decibel.Supervisor), SessionKeyHeir, 0) do
+      {SessionKeyHeir, pid, :worker, _modules} when is_pid(pid) -> pid
+      _other -> nil
+    end
+  catch
+    :exit, _reason -> nil
   end
 
   defp call(request), do: call(request, System.monotonic_time(:millisecond) + 5_000)
@@ -206,7 +218,8 @@ defmodule Decibel.SessionKeys do
     end
   end
 
-  defp proof_data(owner, id, status), do: :erlang.term_to_binary({owner, id, status})
+  defp proof_data(owner, id, status, generation),
+    do: :erlang.term_to_binary({owner, id, status, generation})
 
   defp start_process(run) do
     parent = self()
