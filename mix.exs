@@ -40,9 +40,7 @@ defmodule Decibel.MixProject do
     [
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:doctor, ">= 0.0.0", only: [:dev], runtime: false},
       {:ex_doc, ">= 0.0.0", only: [:dev], runtime: false},
-      {:ex_check, "~> 0.16.0", only: [:dev], runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
       {:jason, "~> 1.0", only: [:dev, :test]},
       {:publisho, "~> 1.0", only: :dev, runtime: false},
