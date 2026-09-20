@@ -158,10 +158,16 @@ defmodule Decibel do
 
   ### Decryption Errors
 
-  If an AEAD decryption failure occurs, a `Decibel.DecryptionError` is raised.
-  Additionally if this error occurs during a handshake, the error's `:remote_keys`
-  property will contain any remote public keys processed during the handshake, up
-  to the point of failure.
+  Malformed peer messages raise `Decibel.DecryptionError`. Its `:reason` field is
+  the stable error contract: `:truncated` identifies an incomplete key field or
+  authentication tag, `:authentication_failed` identifies failed AEAD
+  verification, and `:invalid_public_key` identifies a peer DH key rejected by
+  the selected curve. The exception message remains `"Decryption failed"` for
+  every reason.
+
+  During a handshake, the error's `:remote_keys` field contains any remote public
+  keys processed up to the point of failure. Failed operations do not update the
+  stored handshake state or advance a transport nonce.
 
   ### Example
 
@@ -277,6 +283,11 @@ defmodule Decibel do
   limit of 65,535 bytes. The maximum application-data size varies with the handshake
   pattern and cryptographic primitives because public keys and authentication tags
   are part of the same message.
+
+  A peer public key received in an earlier message might not be used until this
+  write step. If that key is invalid, this function raises
+  `Decibel.DecryptionError` with `reason: :invalid_public_key`. The session state
+  remains unchanged so the caller can abandon the handshake cleanly.
   """
   @spec handshake_encrypt(reference(), iodata()) :: iodata()
   def handshake_encrypt(ref, plaintext \\ []) when is_reference(ref) do
@@ -291,8 +302,11 @@ defmodule Decibel do
   Decrypt an inbound handshake message, returning any optionally provided application
   data.
 
-  The function will raise a `Decibel.DecryptionError` if the handshake data does not
-  decrypt correctly, or `ArgumentError` if the message exceeds 65,535 bytes.
+  Raises `Decibel.DecryptionError` with `reason: :truncated`,
+  `:authentication_failed`, or `:invalid_public_key` if the peer message cannot be
+  processed. Its `:remote_keys` field contains keys processed before the failure,
+  and the stored handshake state remains unchanged. Raises `ArgumentError` if the
+  message exceeds 65,535 bytes.
   """
   @spec handshake_decrypt(reference(), iodata()) :: iodata()
   def handshake_decrypt(ref, ciphertext) when is_reference(ref) do
@@ -350,8 +364,10 @@ defmodule Decibel do
   Decrypts a message over an established session, using an optionally
   provided AAD for message integrity.
 
-  Returns the decrypted message. Raises `Decibel.DecryptionError` if the message
-  cannot be decrypted, or `ArgumentError` if it exceeds 65,535 bytes.
+  Returns the decrypted message. Raises `Decibel.DecryptionError` with
+  `reason: :truncated` or `:authentication_failed` if the message cannot be
+  decrypted. The inbound state and nonce remain unchanged on either failure.
+  Raises `ArgumentError` if the message exceeds 65,535 bytes.
   Raises `Decibel.TransportDirectionError` before any state change if inbound
   transport is not permitted by a one-way handshake.
   Raises `Decibel.NonceError` without changing state if the inbound channel's

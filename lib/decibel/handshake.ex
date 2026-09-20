@@ -88,7 +88,7 @@ defmodule Decibel.Handshake do
         step.(token, state)
       rescue
         e in DecryptionError ->
-          reraise DecryptionError, [message: e.message, remote_keys: [re: state.re, rs: state.rs]], __STACKTRACE__
+          reraise with_remote_keys(e, state), __STACKTRACE__
       end
     end)
   end
@@ -122,7 +122,7 @@ defmodule Decibel.Handshake do
 
   defp read_step(:e, %__MODULE__{re: nil, sym: sym, dh: dh, buf: buf} = state) do
     key_len = Crypto.dh_len(dh)
-    <<re::binary-size(^key_len), rest::binary>> = buf
+    {re, rest} = take_bytes!(buf, key_len)
 
     case %__MODULE__{state | sym: Symmetric.mix_hash(sym, re), re: re, buf: rest} do
       %__MODULE__{pskf: false} = state ->
@@ -135,7 +135,7 @@ defmodule Decibel.Handshake do
 
   defp read_step(:s, %__MODULE__{rs: nil, sym: sym, dh: dh, buf: buf} = state) do
     key_len = Crypto.dh_len(dh) + if has_key?(sym), do: 16, else: 0
-    <<temp::binary-size(^key_len), rest::binary>> = buf
+    {temp, rest} = take_bytes!(buf, key_len)
     {sym, rs} = Symmetric.decrypt_and_hash(sym, temp)
     %__MODULE__{state | sym: sym, rs: rs, buf: rest}
   end
@@ -144,27 +144,27 @@ defmodule Decibel.Handshake do
 
   @spec common_step(:ee | :es | :se | :ss | :psk, __MODULE__.t()) :: __MODULE__.t()
   defp common_step(:ee, %__MODULE__{sym: sym, dh: dh, e: e, re: re} = state) do
-    %__MODULE__{state | sym: Symmetric.mix_key(sym, Crypto.dh(dh, e, re))}
+    %__MODULE__{state | sym: Symmetric.mix_key(sym, dh(dh, e, re))}
   end
 
   defp common_step(:es, %__MODULE__{role: :ini, sym: sym, dh: dh, e: e, rs: rs} = state) do
-    %__MODULE__{state | sym: Symmetric.mix_key(sym, Crypto.dh(dh, e, rs))}
+    %__MODULE__{state | sym: Symmetric.mix_key(sym, dh(dh, e, rs))}
   end
 
   defp common_step(:es, %__MODULE__{role: :rsp, sym: sym, dh: dh, s: s, re: re} = state) do
-    %__MODULE__{state | sym: Symmetric.mix_key(sym, Crypto.dh(dh, s, re))}
+    %__MODULE__{state | sym: Symmetric.mix_key(sym, dh(dh, s, re))}
   end
 
   defp common_step(:se, %__MODULE__{role: :ini, sym: sym, dh: dh, s: s, re: re} = state) do
-    %__MODULE__{state | sym: Symmetric.mix_key(sym, Crypto.dh(dh, s, re))}
+    %__MODULE__{state | sym: Symmetric.mix_key(sym, dh(dh, s, re))}
   end
 
   defp common_step(:se, %__MODULE__{role: :rsp, sym: sym, dh: dh, e: e, rs: rs} = state) do
-    %__MODULE__{state | sym: Symmetric.mix_key(sym, Crypto.dh(dh, e, rs))}
+    %__MODULE__{state | sym: Symmetric.mix_key(sym, dh(dh, e, rs))}
   end
 
   defp common_step(:ss, %__MODULE__{sym: sym, dh: dh, s: s, rs: rs} = state) do
-    %__MODULE__{state | sym: Symmetric.mix_key(sym, Crypto.dh(dh, s, rs))}
+    %__MODULE__{state | sym: Symmetric.mix_key(sym, dh(dh, s, rs))}
   end
 
   defp common_step(:psk, %__MODULE__{sym: sym, psks: [psk | psks]} = state) do
@@ -189,6 +189,9 @@ defmodule Decibel.Handshake do
   defp decrypt_and_hash(%__MODULE__{sym: sym, buf: buf} = state) do
     {%Symmetric{} = sym, plaintext} = Symmetric.decrypt_and_hash(sym, buf)
     %__MODULE__{state | sym: sym, buf: plaintext}
+  rescue
+    e in DecryptionError ->
+      reraise with_remote_keys(e, state), __STACKTRACE__
   end
 
   defp mix_premessage_public_keys(%__MODULE__{} = hs, []), do: hs
@@ -215,4 +218,22 @@ defmodule Decibel.Handshake do
   end
 
   defp has_key?(%Symmetric{cs: %Cipher{k: k}}), do: k != nil
+
+  defp take_bytes!(bytes, length) when byte_size(bytes) >= length do
+    <<field::binary-size(^length), rest::binary>> = bytes
+    {field, rest}
+  end
+
+  defp take_bytes!(_bytes, _length), do: raise(DecryptionError, reason: :truncated)
+
+  defp dh(curve, keypair, public_key) do
+    Crypto.dh(curve, keypair, public_key)
+  rescue
+    _error in ErlangError ->
+      reraise DecryptionError, [reason: :invalid_public_key], __STACKTRACE__
+  end
+
+  defp with_remote_keys(%DecryptionError{} = error, %__MODULE__{re: re, rs: rs}) do
+    %DecryptionError{error | remote_keys: [re: re, rs: rs]}
+  end
 end
