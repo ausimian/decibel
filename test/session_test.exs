@@ -181,10 +181,18 @@ defmodule Decibel.SessionTest do
 
     assert %SessionError{reason: :not_owner} = Task.await(task)
 
+    creator =
+      Task.async(fn ->
+        created_during_restart = Decibel.new(@nn_protocol, :ini)
+        assert :ok == Decibel.close(created_during_restart)
+        :ok
+      end)
+
     assert {:ok, restarted_keys} =
              Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
 
     refute restarted_keys == original_keys
+    assert :ok == Task.await(creator)
     assert :ok == await_session_keys(100)
     assert false == Decibel.is_handshake_complete?(session)
     assert :ok == Decibel.close(session)

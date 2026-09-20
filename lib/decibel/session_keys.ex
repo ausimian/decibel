@@ -16,7 +16,7 @@ defmodule Decibel.SessionKeys do
   end
 
   @spec start_link(term()) :: {:ok, pid()} | {:error, term()}
-  def start_link(_options), do: start_process(&init/0)
+  def start_link(_options), do: start_process(&init/1)
 
   @spec issue() :: {reference(), reference(), binary()}
   def issue, do: call(:issue)
@@ -48,16 +48,17 @@ defmodule Decibel.SessionKeys do
     ArgumentError -> :error
   end
 
-  defp init do
+  defp init(supervisor) do
     Process.flag(:sensitive, true)
+    Process.flag(:trap_exit, true)
     send(self(), :initialize)
-    receive_loop(nil)
+    receive_loop(nil, supervisor)
   end
 
-  defp receive_loop(tables) do
+  defp receive_loop(tables, supervisor) do
     receive do
       :initialize ->
-        receive_loop(initialize_tables())
+        receive_loop(initialize_tables(), supervisor)
 
       {:issue, caller, reference} when not is_nil(tables) ->
         {_public_key, private_key} = :ets.lookup_element(tables.secrets, :keypair, 2)
@@ -66,33 +67,48 @@ defmodule Decibel.SessionKeys do
         data = proof_data(caller, id, status)
         proof = :crypto.sign(:eddsa, :none, data, [private_key, :ed25519])
         send(caller, {reference, {id, status, proof}})
-        receive_loop(tables)
+        receive_loop(tables, supervisor)
 
       {:issue, caller, reference} ->
         send(caller, {reference, :not_ready})
-        receive_loop(tables)
+        receive_loop(tables, supervisor)
 
       {:DOWN, monitor, :process, heir, _reason}
       when not is_nil(tables) and monitor == tables.heir_monitor and heir == tables.heir ->
-        Process.send_after(self(), :rebind_heir, 1)
-        receive_loop(%{tables | heir: nil, heir_monitor: nil})
+        receive_loop(rebind_heir(%{tables | heir: nil, heir_monitor: nil}), supervisor)
 
-      :rebind_heir when not is_nil(tables) ->
-        case supervised_child(SessionKeyHeir) do
-          nil ->
-            Process.send_after(self(), :rebind_heir, 1)
-            receive_loop(tables)
+      {:EXIT, ^supervisor, reason} ->
+        exit(reason)
 
-          heir ->
-            :ets.setopts(tables.public, {:heir, heir, :public})
-            :ets.setopts(tables.secrets, {:heir, heir, :secrets})
-            monitor = Process.monitor(heir)
-            receive_loop(%{tables | heir: heir, heir_monitor: monitor})
-        end
+      {:EXIT, _other, _reason} ->
+        receive_loop(tables, supervisor)
 
       _other ->
-        receive_loop(tables)
+        receive_loop(tables, supervisor)
     end
+  end
+
+  defp rebind_heir(tables) do
+    case supervised_child(SessionKeyHeir) do
+      heir when is_pid(heir) ->
+        if Process.alive?(heir) do
+          :ets.setopts(tables.public, {:heir, heir, :public})
+          :ets.setopts(tables.secrets, {:heir, heir, :secrets})
+          monitor = Process.monitor(heir)
+          %{tables | heir: heir, heir_monitor: monitor}
+        else
+          Process.sleep(1)
+          rebind_heir(tables)
+        end
+
+      nil ->
+        Process.sleep(1)
+        rebind_heir(tables)
+    end
+  rescue
+    ArgumentError ->
+      Process.sleep(1)
+      rebind_heir(tables)
   end
 
   defp initialize_tables do
@@ -159,13 +175,24 @@ defmodule Decibel.SessionKeys do
 
       server ->
         reference = make_ref()
+        monitor = Process.monitor(server)
         send(server, {request, self(), reference})
 
         receive do
-          {^reference, :not_ready} -> retry_call(request, deadline)
-          {^reference, response} -> response
+          {^reference, :not_ready} ->
+            Process.demonitor(monitor, [:flush])
+            retry_call(request, deadline)
+
+          {^reference, response} ->
+            Process.demonitor(monitor, [:flush])
+            response
+
+          {:DOWN, ^monitor, :process, ^server, _reason} ->
+            retry_call(request, deadline)
         after
-          5_000 -> exit({:timeout, {__MODULE__, request}})
+          max(deadline - System.monotonic_time(:millisecond), 0) ->
+            Process.demonitor(monitor, [:flush])
+            exit({:timeout, {__MODULE__, request}})
         end
     end
   end
@@ -196,7 +223,7 @@ defmodule Decibel.SessionKeys do
       spawn_link(fn ->
         Process.register(self(), __MODULE__)
         send(parent, {reference, :started, self()})
-        run.()
+        run.(parent)
       end)
 
     receive do
