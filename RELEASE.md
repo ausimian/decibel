@@ -9,6 +9,12 @@
 
 ### Changed
 
+- **Breaking:** Replace bare session references with owner-aware opaque handles.
+  Sessions remain local to the process that creates them, cannot be transferred
+  or used concurrently from another process, and live until closed, their owner
+  exits, or the `:decibel` application stops. Cross-process, closed, unknown,
+  and phase-invalid use now raises `Decibel.SessionError` with stable reasons
+  instead of leaking internal match, case, or map errors.
 - **Breaking:** Reject attempts to move an outbound transport nonce backwards,
   preventing accidental key/nonce reuse. Callers should read the next outbound
   nonce with `get_nonce/2`; forward skips and inbound nonce selection remain

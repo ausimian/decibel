@@ -162,7 +162,8 @@ defmodule Decibel do
   truncated, unauthenticated, or invalid-key peer messages raise
   `Decibel.DecryptionError` without committing state. Nonce failures raise
   `Decibel.NonceError`, and operations on a discarded one-way direction raise
-  `Decibel.TransportDirectionError`.
+  `Decibel.TransportDirectionError`. Invalid session ownership, lifetime, and
+  phase transitions raise `Decibel.SessionError` with a stable `:reason`.
 
   ## Overview
   Decibel encrypts and decrypts messages according to the Noise Protocol,
@@ -230,6 +231,40 @@ defmodule Decibel do
 
   ## Lifecycle
 
+  ### Ownership and lifetime
+
+  `new/4` returns an opaque `t:session/0` handle. The session state belongs to
+  the process that calls `new/4` and is stored in that process until `close/1`
+  is called, the owner process exits, or the `:decibel` OTP application stops.
+  A handle contains no cryptographic state and must not be inspected or
+  constructed by callers.
+
+  Every operation on a session must run in its owner process. Do not pass the
+  handle to a task, worker, or peer process, and do not call it concurrently.
+  Pass Noise messages and application data between processes instead. A
+  `GenServer` or similar long-lived process can own a session and serialize all
+  operations in its callbacks. If that process terminates, its supervisor must
+  establish a new session; the old one cannot be recovered or transferred.
+  Applications must likewise keep `:decibel` started while sessions are live;
+  stopping the application ends every session lifetime, and handles retained
+  across a later application start are unknown rather than transferable or
+  recoverable sessions. Because only a process can alter its own process
+  dictionary, owner-local state from that application generation is erased when
+  the owner next calls Decibel or when the owner process exits.
+
+  Decibel does not support session ownership transfer. Using a genuine handle
+  in another process raises `Decibel.SessionError` with `reason: :not_owner`,
+  including when the owner has already closed it. A legacy bare reference or
+  another unknown value uses `reason: :unknown`. After `close/1`, every
+  operation by the owner, including another close, uses `reason: :closed`.
+
+  During a live handshake, only the operation for the next pattern message is
+  permitted. `handshake_encrypt/2` requires the `:handshake_write` phase and
+  `handshake_decrypt/2` requires `:handshake_read`. Transport and cipher-state
+  operations require `:transport`. A phase-invalid call raises
+  `Decibel.SessionError` with `reason: :wrong_phase`, the operation, and the
+  expected and actual phases, without changing session state.
+
   ### Creation
 
   Each party begins by creating a new handshake, via `new/4`, specifying the
@@ -244,7 +279,8 @@ defmodule Decibel do
   ini  = Decibel.new("Noise_IK_448_ChaChaPoly_BLAKE2b", :ini, keys)
   ```
 
-  The result of `new/4` is a reference used for the rest of the session.
+  The result of `new/4` is an opaque owner-aware handle used for the rest of the
+  session. It is valid only in the process that created it.
 
   ### Handshake
 
@@ -291,8 +327,9 @@ defmodule Decibel do
   `Decibel.NonceError`. An exhausted channel cannot be revived by `rekey/2`,
   so the application must close it and establish a new session.
 
-  Once the session is complete, each party should call `close/1` to free the
-  resources associated with the it.
+  When the application is finished with the session, each party should call
+  `close/1` to discard its cryptographic state. Owner-process termination also
+  discards the state automatically.
 
   ## Noise Pipes
 
@@ -307,6 +344,9 @@ defmodule Decibel do
   [Wiki](https://github.com/noiseprotocol/noise_wiki/wiki/Test-vectors#noise-pipes).
   Decibel provides support for all these individual protocols and the necessary
   information to transition between a failed IK handshake and the fallback.
+  The failed session and its replacement fallback session must be created and
+  operated by the same owner process. Pass the failed ciphertext to that owner;
+  do not pass its session handle to a separate fallback worker.
 
   ### Decryption Errors
 
@@ -380,6 +420,11 @@ defmodule Decibel do
   > authenticated message. An outbound nonce must never be reused with the same
   > key. Decibel deliberately exposes a low-level nonce API and does not provide
   > a replay-protected decrypt today, so the application owns this replay state.
+
+  The sender and recipient sessions stay in their respective owner processes.
+  Transfer `{nonce, ciphertext, aad}` between processes or peers, not either
+  session handle. Each owner must serialize its session operations with updates
+  to its application-owned replay window.
 
   A sender reads the nonce that `encrypt/3` will consume and sends it alongside
   the ciphertext:
@@ -487,7 +532,10 @@ defmodule Decibel do
   @typedoc "An option used to initialize a handshake."
   @type option :: {:swap, role()} | {:registry, module()}
 
-  alias Decibel.{ChannelPair, Cipher, Handshake}
+  @typedoc "An opaque, process-owned Noise session handle."
+  @type session :: Decibel.Session.t()
+
+  alias Decibel.{ChannelPair, Cipher, Handshake, Session}
 
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
@@ -545,14 +593,14 @@ defmodule Decibel do
   fallback pre-message or with lengths that do not match the selected DH
   function. Validation completes before any session state is stored.
 
-  Returns a reference representing the handshake.
+  Returns an opaque session handle representing the handshake. The calling
+  process owns the session for its lifetime; see
+  [Ownership and lifetime](#module-ownership-and-lifetime).
   """
-  @spec new(String.t(), role(), key_material(), [option()]) :: reference()
+  @spec new(String.t(), role(), key_material(), [option()]) :: session()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
     hs = Handshake.initialize(protocol_name, role, keys, opts, :safe)
-    ref = make_ref()
-    Process.put(ref, hs)
-    ref
+    Session.create(hs)
   end
 
   @doc """
@@ -577,13 +625,18 @@ defmodule Decibel do
   write step. If that key is invalid, this function raises
   `Decibel.DecryptionError` with `reason: :invalid_public_key`. The session state
   remains unchanged so the caller can abandon the handshake cleanly.
+
+  Requires the session's `:handshake_write` phase. Ownership, closed/unknown
+  handles, and a wrong handshake turn raise `Decibel.SessionError` before any
+  state change.
   """
-  @spec handshake_encrypt(reference(), iodata()) :: iodata()
-  def handshake_encrypt(ref, plaintext \\ []) when is_reference(ref) do
+  @spec handshake_encrypt(session(), iodata()) :: iodata()
+  def handshake_encrypt(session, plaintext \\ []) do
+    hs = Session.fetch!(session, :handshake_encrypt, :handshake_write)
     validate_size!(plaintext, @max_message_size, "handshake plaintext")
-    {hs, ciphertext} = Handshake.write_message(Process.get(ref), plaintext)
+    {hs, ciphertext} = Handshake.write_message(hs, plaintext)
     validate_size!(ciphertext, @max_message_size, "handshake message")
-    Process.put(ref, hs)
+    Session.store!(session, hs)
     ciphertext
   end
 
@@ -599,33 +652,47 @@ defmodule Decibel do
 
   See [Failure handling](#module-failure-handling) before deciding whether to
   abandon the handshake or enter a reviewed fallback protocol.
+
+  Requires the session's `:handshake_read` phase. Ownership, closed/unknown
+  handles, and a wrong handshake turn raise `Decibel.SessionError` before any
+  state change.
   """
-  @spec handshake_decrypt(reference(), iodata()) :: iodata()
-  def handshake_decrypt(ref, ciphertext) when is_reference(ref) do
+  @spec handshake_decrypt(session(), iodata()) :: iodata()
+  def handshake_decrypt(session, ciphertext) do
+    hs = Session.fetch!(session, :handshake_decrypt, :handshake_read)
     validate_size!(ciphertext, @max_message_size, "handshake message")
-    {hs, plaintext} = Handshake.read_message(Process.get(ref), ciphertext)
-    Process.put(ref, hs)
+    {hs, plaintext} = Handshake.read_message(hs, ciphertext)
+    Session.store!(session, hs)
     plaintext
   end
 
   @doc """
   Returns `true` if the handshake is complete, `false` otherwise.
+
+  This accessor is valid during either handshake turn and transport. Invalid
+  ownership or a closed/unknown handle raises `Decibel.SessionError`.
   """
-  @spec is_handshake_complete?(reference()) :: boolean()
+  @spec is_handshake_complete?(session()) :: boolean()
   # Keep the established public API name for backwards compatibility.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
-  def is_handshake_complete?(ref) do
-    !!get_handshake_hash(ref)
+  def is_handshake_complete?(session) do
+    case Session.fetch!(session, :is_handshake_complete, :any) do
+      %Handshake{} -> false
+      %ChannelPair{} -> true
+    end
   end
 
   @doc """
   Returns a 32-byte handshake hash, unique to the established session.
 
   Returns `nil` if the handshake is not yet completed.
+
+  This accessor is valid during either handshake turn and transport. Invalid
+  ownership or a closed/unknown handle raises `Decibel.SessionError`.
   """
-  @spec get_handshake_hash(reference()) :: binary() | nil
-  def get_handshake_hash(ref) when is_reference(ref) do
-    case Process.get(ref) do
+  @spec get_handshake_hash(session()) :: binary() | nil
+  def get_handshake_hash(session) do
+    case Session.fetch!(session, :get_handshake_hash, :any) do
       %Handshake{} -> nil
       %ChannelPair{} = cp -> ChannelPair.get_hash(cp)
     end
@@ -648,12 +715,17 @@ defmodule Decibel do
   transport is not permitted by a one-way handshake.
   Raises `Decibel.NonceError` without changing state if the outbound channel's
   nonce is exhausted.
+
+  Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
+  or use during the handshake raises `Decibel.SessionError` before any state
+  change.
   """
-  @spec encrypt(reference(), iodata(), iodata()) :: iodata()
-  def encrypt(ref, plaintext, ad \\ []) do
+  @spec encrypt(session(), iodata(), iodata()) :: iodata()
+  def encrypt(session, plaintext, ad \\ []) do
+    channel_pair = Session.fetch!(session, :encrypt, :transport)
     validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
-    {cs, ciphertext} = ChannelPair.write_message(Process.get(ref), ad, plaintext)
-    Process.put(ref, cs)
+    {channel_pair, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
+    Session.store!(session, channel_pair)
     ciphertext
   end
 
@@ -672,26 +744,32 @@ defmodule Decibel do
 
   See [Failure handling](#module-failure-handling) for the policy an application
   must apply to unauthenticated transport messages.
+
+  Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
+  or use during the handshake raises `Decibel.SessionError` before any state
+  change.
   """
-  @spec decrypt(reference(), iodata(), iodata()) :: iodata()
-  def decrypt(ref, ciphertext, ad \\ []) do
+  @spec decrypt(session(), iodata(), iodata()) :: iodata()
+  def decrypt(session, ciphertext, ad \\ []) do
+    channel_pair = Session.fetch!(session, :decrypt, :transport)
     validate_size!(ciphertext, @max_message_size, "transport message")
-    {cs, plaintext} = ChannelPair.read_message(Process.get(ref), ad, ciphertext)
-    Process.put(ref, cs)
+    {channel_pair, plaintext} = ChannelPair.read_message(channel_pair, ad, ciphertext)
+    Session.store!(session, channel_pair)
     plaintext
   end
 
   @doc """
   Release the resources associated with the session.
 
-  These resources are automatically released when the process terminates, but
-  this call may be used to eagerly clean them up.
+  This discards handshake or transport state immediately, including pending
+  key material. The state is also released automatically when the owner process
+  terminates. The handle remains closed and cannot be reused.
+
+  Invalid ownership or an unknown handle raises `Decibel.SessionError`. Calling
+  `close/1` again raises it with `reason: :closed`.
   """
-  @spec close(reference()) :: :ok
-  def close(ref) do
-    Process.delete(ref)
-    :ok
-  end
+  @spec close(session()) :: :ok
+  def close(session), do: Session.close!(session)
 
   @doc """
   Rekey the inbound or outbound channel of the session.
@@ -708,10 +786,16 @@ defmodule Decibel do
 
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
+
+  Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
+  or use during the handshake raises `Decibel.SessionError` before any state
+  change.
   """
-  @spec rekey(reference, :in | :out) :: :ok
-  def rekey(ref, dir) when is_reference(ref) and dir in [:in, :out] do
-    Process.put(ref, ChannelPair.rekey(Process.get(ref), dir))
+  @spec rekey(session(), :in | :out) :: :ok
+  def rekey(session, dir) do
+    channel_pair = Session.fetch!(session, :rekey, :transport)
+    validate_direction!(dir)
+    Session.store!(session, ChannelPair.rekey(channel_pair, dir))
     :ok
   end
 
@@ -730,10 +814,15 @@ defmodule Decibel do
 
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
+
+  Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
+  or use during the handshake raises `Decibel.SessionError`.
   """
-  @spec get_nonce(reference(), :in | :out) :: Cipher.nonce()
-  def get_nonce(ref, dir) when is_reference(ref) and dir in [:in, :out] do
-    ChannelPair.get_n(Process.get(ref), dir)
+  @spec get_nonce(session(), :in | :out) :: Cipher.nonce()
+  def get_nonce(session, dir) do
+    channel_pair = Session.fetch!(session, :get_nonce, :transport)
+    validate_direction!(dir)
+    ChannelPair.get_n(channel_pair, dir)
   end
 
   @doc """
@@ -762,10 +851,16 @@ defmodule Decibel do
   See
   [Nonces, replay protection, and rekeying](#module-nonces-replay-protection-and-rekeying)
   before using this low-level operation.
+
+  Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
+  or use during the handshake raises `Decibel.SessionError` before any state
+  change.
   """
-  @spec set_nonce(reference(), :in | :out, Cipher.usable_nonce()) :: :ok
-  def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] do
-    Process.put(ref, ChannelPair.set_n(Process.get(ref), dir, n))
+  @spec set_nonce(session(), :in | :out, Cipher.usable_nonce()) :: :ok
+  def set_nonce(session, dir, n) do
+    channel_pair = Session.fetch!(session, :set_nonce, :transport)
+    validate_direction!(dir)
+    Session.store!(session, ChannelPair.set_n(channel_pair, dir, n))
     :ok
   end
 
@@ -775,10 +870,21 @@ defmodule Decibel do
   A returned key is protocol output, not a trust decision. Authenticate it
   according to
   [Authentication and key handling](#module-authentication-and-key-handling).
+
+  This accessor is valid during either handshake turn and transport. Invalid
+  ownership or a closed/unknown handle raises `Decibel.SessionError`.
   """
-  @spec get_remote_key(reference) :: nil | binary()
-  def get_remote_key(ref) when is_reference(ref) do
-    Map.get(Process.get(ref), :rs)
+  @spec get_remote_key(session()) :: nil | binary()
+  def get_remote_key(session) do
+    session
+    |> Session.fetch!(:get_remote_key, :any)
+    |> Map.get(:rs)
+  end
+
+  defp validate_direction!(direction) when direction in [:in, :out], do: :ok
+
+  defp validate_direction!(direction) do
+    raise ArgumentError, "direction must be :in or :out, got: #{inspect(direction)}"
   end
 
   defp validate_size!(data, maximum, description) do
