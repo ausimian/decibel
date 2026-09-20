@@ -8,7 +8,7 @@ defmodule Decibel.Symmetric do
     field(:cs, Cipher.t())
     field(:hf, Crypto.hash())
     field(:ck, binary())
-    field(:h, binary())
+    field(:h, Decibel.handshake_hash())
   end
 
   @doc false
@@ -48,7 +48,7 @@ defmodule Decibel.Symmetric do
   end
 
   @doc false
-  @spec get_hash(__MODULE__.t()) :: binary()
+  @spec get_hash(__MODULE__.t()) :: Decibel.handshake_hash()
   def get_hash(%__MODULE__{h: h}), do: h
 
   @doc false

@@ -549,7 +549,12 @@ defmodule Decibel do
   @typedoc "A public-private Diffie-Hellman keypair."
   @type keypair :: {binary(), binary()}
 
-  @typedoc "A Noise handshake hash, sized according to the selected hash function."
+  @typedoc """
+  A Noise handshake hash.
+
+  `SHA256` and `BLAKE2s` produce 32-byte hashes; `SHA512` and `BLAKE2b`
+  produce 64-byte hashes.
+  """
   @type handshake_hash :: <<_::256>> | <<_::512>>
 
   @typedoc "A cipher nonce, including Noise's reserved exhausted value."
@@ -739,6 +744,34 @@ defmodule Decibel do
 
   The hash is 32 bytes for `SHA256` and `BLAKE2s`, or 64 bytes for `SHA512`
   and `BLAKE2b`. Returns `nil` if the handshake is not yet completed.
+
+  ## Examples
+
+      iex> initiator = Decibel.new("Noise_NN_25519_ChaChaPoly_SHA256", :ini)
+      iex> responder = Decibel.new("Noise_NN_25519_ChaChaPoly_SHA256", :rsp)
+      iex> Decibel.handshake_encrypt(initiator) |> then(&Decibel.handshake_decrypt(responder, &1))
+      ""
+      iex> Decibel.handshake_encrypt(responder) |> then(&Decibel.handshake_decrypt(initiator, &1))
+      ""
+      iex> match?(<<_::32-bytes>>, Decibel.handshake_hash(initiator))
+      true
+      iex> Decibel.handshake_hash(initiator) == Decibel.handshake_hash(responder)
+      true
+      iex> {Decibel.close(initiator), Decibel.close(responder)}
+      {:ok, :ok}
+
+      iex> initiator = Decibel.new("Noise_NN_448_AESGCM_BLAKE2b", :ini)
+      iex> responder = Decibel.new("Noise_NN_448_AESGCM_BLAKE2b", :rsp)
+      iex> Decibel.handshake_encrypt(initiator) |> then(&Decibel.handshake_decrypt(responder, &1))
+      ""
+      iex> Decibel.handshake_encrypt(responder) |> then(&Decibel.handshake_decrypt(initiator, &1))
+      ""
+      iex> match?(<<_::64-bytes>>, Decibel.handshake_hash(initiator))
+      true
+      iex> Decibel.handshake_hash(initiator) == Decibel.handshake_hash(responder)
+      true
+      iex> {Decibel.close(initiator), Decibel.close(responder)}
+      {:ok, :ok}
 
   This accessor is valid during either handshake turn and transport. Invalid
   ownership or a closed/unknown handle raises `Decibel.SessionError`.
