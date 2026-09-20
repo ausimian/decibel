@@ -1,5 +1,11 @@
 ### Added
 
+- Add fixed-seed adversarial state-machine coverage for malformed and truncated
+  input, invalid call order, fragmented iodata, authentication-failure retries,
+  and nonce boundaries across the supported Noise pattern and primitive families.
+- Pin each checked-in interoperability vector to its upstream revision, licence,
+  checksums, and local transformation, with offline verification and explicit
+  regeneration commands.
 - Document the unaudited, pre-1.0 security posture and supported Noise r34
   surface, with safe-use guidance for key and PSK handling, peer authentication,
   protocol negotiation, framing, nonces and replay protection, rekeying, and
