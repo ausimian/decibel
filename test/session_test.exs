@@ -157,19 +157,16 @@ defmodule Decibel.SessionTest do
     original_heir = Process.whereis(Decibel.SessionKeyHeir)
 
     on_exit(fn ->
-      for child <- [Decibel.SessionKeyHeir, Decibel.SessionKeys],
-          is_nil(Process.whereis(child)) do
-        Supervisor.restart_child(Decibel.Supervisor, child)
+      Application.ensure_all_started(:decibel)
+
+      if is_pid(Process.whereis(Decibel.Supervisor)) and
+           is_nil(Process.whereis(Decibel.SessionKeys)) do
+        Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
       end
     end)
 
-    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeyHeir)
-
-    assert {:ok, restarted_heir} =
-             Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeyHeir)
-
-    refute restarted_heir == original_heir
-    assert :ok == await_session_heir(restarted_heir, 100)
+    Process.exit(original_heir, :kill)
+    assert {:ok, _restarted_heir} = await_replacement_heir(original_heir, 100)
 
     assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeys)
     assert IO.iodata_length(Decibel.handshake_encrypt(session)) == 32
@@ -193,6 +190,20 @@ defmodule Decibel.SessionTest do
 
     refute restarted_keys == original_keys
     assert :ok == Task.await(creator)
+    assert :ok == await_session_keys(100)
+
+    persistent_heir = Process.whereis(Decibel.SessionKeyHeir)
+    assert :ok == Application.stop(:decibel)
+    assert Process.whereis(Decibel.SessionKeyHeir) == persistent_heir
+
+    stopped_task =
+      Task.async(fn ->
+        capture_session_error(fn -> Decibel.get_handshake_hash(session) end)
+      end)
+
+    assert %SessionError{reason: :not_owner} = Task.await(stopped_task)
+    assert {:ok, _started} = Application.ensure_all_started(:decibel)
+    assert Process.whereis(Decibel.SessionKeyHeir) == persistent_heir
     assert :ok == await_session_keys(100)
     assert false == Decibel.is_handshake_complete?(session)
     assert :ok == Decibel.close(session)
@@ -479,14 +490,22 @@ defmodule Decibel.SessionTest do
     end
   end
 
-  defp await_session_heir(_heir, 0), do: flunk("session key heir was not rebound")
+  defp await_replacement_heir(_original_heir, 0),
+    do: flunk("session key heir was not replaced")
 
-  defp await_session_heir(heir, attempts_left) do
-    if :ets.info(:decibel_session_public_keys, :heir) == heir do
-      :ok
-    else
-      Process.sleep(1)
-      await_session_heir(heir, attempts_left - 1)
+  defp await_replacement_heir(original_heir, attempts_left) do
+    case Process.whereis(Decibel.SessionKeyHeir) do
+      heir when is_pid(heir) and heir != original_heir ->
+        if :ets.info(:decibel_session_public_keys, :heir) == heir do
+          {:ok, heir}
+        else
+          Process.sleep(1)
+          await_replacement_heir(original_heir, attempts_left - 1)
+        end
+
+      _other ->
+        Process.sleep(1)
+        await_replacement_heir(original_heir, attempts_left - 1)
     end
   end
 end

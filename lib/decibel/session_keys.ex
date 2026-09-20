@@ -16,7 +16,7 @@ defmodule Decibel.SessionKeys do
   end
 
   @spec start_link(term()) :: {:ok, pid()} | {:error, term()}
-  def start_link(_options), do: start_process(&init/1)
+  def start_link(heir), do: start_process(&init(&1, heir))
 
   @spec issue() :: {reference(), reference(), binary()}
   def issue, do: call(:issue)
@@ -48,17 +48,17 @@ defmodule Decibel.SessionKeys do
     ArgumentError -> :error
   end
 
-  defp init(supervisor) do
+  defp init(supervisor, heir) do
     Process.flag(:sensitive, true)
     Process.flag(:trap_exit, true)
     send(self(), :initialize)
-    receive_loop(nil, supervisor)
+    receive_loop(nil, supervisor, heir)
   end
 
-  defp receive_loop(tables, supervisor) do
+  defp receive_loop(tables, supervisor, initial_heir) do
     receive do
       :initialize ->
-        receive_loop(initialize_tables(), supervisor)
+        receive_loop(initialize_tables(initial_heir), supervisor, initial_heir)
 
       {:issue, caller, reference} when not is_nil(tables) ->
         {_public_key, private_key} = :ets.lookup_element(tables.secrets, :keypair, 2)
@@ -67,43 +67,39 @@ defmodule Decibel.SessionKeys do
         data = proof_data(caller, id, status)
         proof = :crypto.sign(:eddsa, :none, data, [private_key, :ed25519])
         send(caller, {reference, {id, status, proof}})
-        receive_loop(tables, supervisor)
+        receive_loop(tables, supervisor, initial_heir)
 
       {:issue, caller, reference} ->
         send(caller, {reference, :not_ready})
-        receive_loop(tables, supervisor)
+        receive_loop(tables, supervisor, initial_heir)
 
       {:DOWN, monitor, :process, heir, _reason}
       when not is_nil(tables) and monitor == tables.heir_monitor and heir == tables.heir ->
-        receive_loop(rebind_heir(%{tables | heir: nil, heir_monitor: nil}), supervisor)
+        rebound = rebind_heir(%{tables | heir: nil, heir_monitor: nil})
+        receive_loop(rebound, supervisor, rebound.heir)
 
       {:EXIT, ^supervisor, reason} ->
         exit(reason)
 
       {:EXIT, _other, _reason} ->
-        receive_loop(tables, supervisor)
+        receive_loop(tables, supervisor, initial_heir)
 
       _other ->
-        receive_loop(tables, supervisor)
+        receive_loop(tables, supervisor, initial_heir)
     end
   end
 
   defp rebind_heir(tables) do
-    case supervised_child(SessionKeyHeir) do
-      heir when is_pid(heir) ->
-        if Process.alive?(heir) do
-          :ets.setopts(tables.public, {:heir, heir, :public})
-          :ets.setopts(tables.secrets, {:heir, heir, :secrets})
-          monitor = Process.monitor(heir)
-          %{tables | heir: heir, heir_monitor: monitor}
-        else
-          Process.sleep(1)
-          rebind_heir(tables)
-        end
+    {:ok, heir} = SessionKeyHeir.ensure_started()
 
-      nil ->
-        Process.sleep(1)
-        rebind_heir(tables)
+    if Process.alive?(heir) do
+      :ets.setopts(tables.public, {:heir, heir, :public})
+      :ets.setopts(tables.secrets, {:heir, heir, :secrets})
+      monitor = Process.monitor(heir)
+      %{tables | heir: heir, heir_monitor: monitor}
+    else
+      Process.sleep(1)
+      rebind_heir(tables)
     end
   rescue
     ArgumentError ->
@@ -111,12 +107,16 @@ defmodule Decibel.SessionKeys do
       rebind_heir(tables)
   end
 
-  defp initialize_tables do
-    heir = supervised_child(SessionKeyHeir)
-
-    case :ets.whereis(@public_keys) do
-      :undefined -> create_tables(heir)
-      _public -> reclaim_tables(heir)
+  defp initialize_tables(heir) do
+    if Process.alive?(heir) do
+      case :ets.whereis(@public_keys) do
+        :undefined -> create_tables(heir)
+        _public -> reclaim_tables(heir)
+      end
+    else
+      case SessionKeyHeir.ensure_started() do
+        {:ok, replacement} -> initialize_tables(replacement)
+      end
     end
   end
 
@@ -207,13 +207,6 @@ defmodule Decibel.SessionKeys do
   end
 
   defp proof_data(owner, id, status), do: :erlang.term_to_binary({owner, id, status})
-
-  defp supervised_child(module) do
-    case List.keyfind(Supervisor.which_children(Decibel.Supervisor), module, 0) do
-      {^module, pid, :worker, _modules} when is_pid(pid) -> pid
-      _other -> nil
-    end
-  end
 
   defp start_process(run) do
     parent = self()

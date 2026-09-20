@@ -1,18 +1,13 @@
 defmodule Decibel.SessionKeyHeir do
   @moduledoc false
 
-  @spec child_spec(term()) :: Supervisor.child_spec()
-  def child_spec(options) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [options]},
-      type: :worker,
-      restart: :permanent
-    }
+  @spec ensure_started() :: {:ok, pid()}
+  def ensure_started do
+    case Process.whereis(__MODULE__) do
+      nil -> start_process()
+      pid -> {:ok, pid}
+    end
   end
-
-  @spec start_link(term()) :: {:ok, pid()} | {:error, term()}
-  def start_link(_options), do: start_process(&loop/0)
 
   defp loop do
     Process.flag(:sensitive, true)
@@ -48,22 +43,27 @@ defmodule Decibel.SessionKeyHeir do
     end
   end
 
-  defp start_process(run) do
+  defp start_process do
     parent = self()
     reference = make_ref()
 
     pid =
-      spawn_link(fn ->
-        Process.register(self(), __MODULE__)
-        send(parent, {reference, :started, self()})
-        run.()
+      spawn(fn ->
+        try do
+          Process.group_leader(self(), Process.whereis(:init))
+          Process.register(self(), __MODULE__)
+          send(parent, {reference, :started, self()})
+          loop()
+        rescue
+          ArgumentError -> send(parent, {reference, :already_started})
+        end
       end)
 
     receive do
       {^reference, :started, ^pid} -> {:ok, pid}
-      {:EXIT, ^pid, reason} -> {:error, reason}
+      {^reference, :already_started} -> ensure_started()
     after
-      5_000 -> {:error, :start_timeout}
+      5_000 -> exit({:timeout, {__MODULE__, :ensure_started}})
     end
   end
 end

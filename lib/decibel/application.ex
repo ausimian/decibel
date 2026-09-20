@@ -5,10 +5,8 @@ defmodule Decibel.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      Decibel.SessionKeyHeir,
-      Decibel.SessionKeys
-    ]
+    {:ok, key_heir} = Decibel.SessionKeyHeir.ensure_started()
+    children = [{Decibel.SessionKeys, key_heir}]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Decibel.Supervisor)
   end
