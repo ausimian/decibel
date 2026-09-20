@@ -6,6 +6,7 @@ defmodule Decibel.Crypto do
   @type curve() :: :x25519 | :x448
   @type public_key() :: :crypto.dh_public()
   @type private_key() :: :crypto.dh_private()
+  @type decryption_error_reason() :: :truncated | :authentication_failed
 
   @reserved_nonce 2 ** 64 - 1
 
@@ -69,11 +70,21 @@ defmodule Decibel.Crypto do
   integer nonce, and associated data aad. Returns the plaintext, unless
   authentication fails, in which case an error is signaled to the caller.
   """
-  @spec decrypt(cipher(), <<_::256>>, nonce(), iodata(), iodata()) :: binary() | :error
+  @spec decrypt(cipher(), <<_::256>>, nonce(), iodata(), iodata()) ::
+          binary() | {:error, decryption_error_reason()}
   def decrypt(cipher, <<key::binary-size(32)>>, nonce, aad, crypttext) do
     bytes = IO.iodata_to_binary(crypttext)
-    {data, tag} = :erlang.split_binary(bytes, byte_size(bytes) - 16)
-    :crypto.crypto_one_time_aead(cipher, key, cipher_iv(cipher, nonce), data, aad, tag, false)
+
+    if byte_size(bytes) < 16 do
+      {:error, :truncated}
+    else
+      {data, tag} = :erlang.split_binary(bytes, byte_size(bytes) - 16)
+
+      case :crypto.crypto_one_time_aead(cipher, key, cipher_iv(cipher, nonce), data, aad, tag, false) do
+        plaintext when is_binary(plaintext) -> plaintext
+        :error -> {:error, :authentication_failed}
+      end
+    end
   end
 
   @doc """

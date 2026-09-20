@@ -1,7 +1,7 @@
 defmodule Decibel.Cipher do
   @moduledoc false
   use TypedStruct
-  alias Decibel.{Crypto, NonceError}
+  alias Decibel.{Crypto, DecryptionError, NonceError}
 
   @reserved_nonce 2 ** 64 - 1
   @final_usable_nonce @reserved_nonce - 1
@@ -80,7 +80,7 @@ defmodule Decibel.Cipher do
   cipher and the plaintext, unless authentication fails, in which case an
   error is signaled to the caller.
   """
-  @spec decrypt_with_aad(__MODULE__.t(), iodata(), iodata()) :: {__MODULE__.t(), iodata()} | :error
+  @spec decrypt_with_aad(__MODULE__.t(), iodata(), iodata()) :: {__MODULE__.t(), iodata()}
   def decrypt_with_aad(%__MODULE__{k: nil} = cipher, _, ciphertext), do: {cipher, ciphertext}
 
   def decrypt_with_aad(%__MODULE__{type: type, k: k, n: n} = cipher, aad, ciphertext)
@@ -89,8 +89,8 @@ defmodule Decibel.Cipher do
       plaintext when is_binary(plaintext) ->
         {%__MODULE__{cipher | n: n + 1}, plaintext}
 
-      :error ->
-        raise Decibel.DecryptionError
+      {:error, reason} ->
+        raise DecryptionError, reason: reason
     end
   end
 
