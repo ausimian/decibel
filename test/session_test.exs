@@ -62,9 +62,15 @@ defmodule Decibel.SessionTest do
     end
 
     invalid_proof = :crypto.strong_rand_bytes(32)
+    invalid_status = :atomics.new(1, signed: false)
 
     never_issued =
-      struct!(Session, owner: self(), id: make_ref(), proof: invalid_proof)
+      struct!(Session,
+        owner: self(),
+        id: make_ref(),
+        status: invalid_status,
+        proof: invalid_proof
+      )
 
     for {_operation, call} <- all_operations(never_issued) do
       assert_session_error(call, :unknown, "Unknown Decibel session")
@@ -73,7 +79,12 @@ defmodule Decibel.SessionTest do
     foreign_owner = spawn(fn -> receive do: (:stop -> :ok) end)
 
     foreign_never_issued =
-      struct!(Session, owner: foreign_owner, id: make_ref(), proof: invalid_proof)
+      struct!(Session,
+        owner: foreign_owner,
+        id: make_ref(),
+        status: invalid_status,
+        proof: invalid_proof
+      )
 
     for {_operation, call} <- all_operations(foreign_never_issued) do
       assert_session_error(call, :unknown, "Unknown Decibel session")
@@ -98,6 +109,7 @@ defmodule Decibel.SessionTest do
     assert :ok == Decibel.close(session)
 
     refute Enum.any?(Process.get(), fn
+             {{Session, _id}, _state} -> true
              {_key, %Decibel.Handshake{}} -> true
              {_key, %Decibel.ChannelPair{}} -> true
              {_key, _value} -> false
@@ -118,6 +130,18 @@ defmodule Decibel.SessionTest do
     end
 
     assert :ok == Decibel.close(responder)
+  end
+
+  test "closing sessions does not retain tombstones in a long-lived owner" do
+    for _index <- 1..100 do
+      session = Decibel.new(@nn_protocol, :ini)
+      assert :ok == Decibel.close(session)
+    end
+
+    refute Enum.any?(Process.get(), fn
+             {{Session, _id}, _state} -> true
+             {_key, _value} -> false
+           end)
   end
 
   test "wrong handshake turns and phases raise stable errors without advancing state" do

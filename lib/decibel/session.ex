@@ -13,18 +13,18 @@ defmodule Decibel.Session do
   the complete concurrency, supervision, phase, and lifecycle contract.
   """
 
-  alias Decibel.{ChannelPair, Handshake, SessionError}
+  alias Decibel.{ChannelPair, Handshake, SessionError, SessionIssuer}
 
-  @closed :closed
-  @issuance_key {__MODULE__, :issuance_key}
   @missing :missing
+  @status_closed 1
 
-  @enforce_keys [:owner, :id, :proof]
-  defstruct [:owner, :id, :proof]
+  @enforce_keys [:owner, :id, :status, :proof]
+  defstruct [:owner, :id, :status, :proof]
 
   @opaque t :: %__MODULE__{
             owner: pid(),
             id: reference(),
+            status: reference(),
             proof: binary()
           }
 
@@ -35,8 +35,8 @@ defmodule Decibel.Session do
   @spec create(state()) :: t()
   def create(state) do
     owner = self()
-    id = make_ref()
-    session = %__MODULE__{owner: owner, id: id, proof: issuance_proof(owner, id)}
+    {id, status, proof} = SessionIssuer.issue()
+    session = %__MODULE__{owner: owner, id: id, status: status, proof: proof}
     Process.put(storage_key(session), state)
     session
   end
@@ -62,13 +62,14 @@ defmodule Decibel.Session do
   def close!(session) do
     validated = validate_handle!(session)
     _state = validated |> fetch_state!() |> validate_phase!(:close, :any)
-    Process.put(storage_key(validated), @closed)
+    Process.delete(storage_key(validated))
+    :atomics.put(validated.status, 1, @status_closed)
     :ok
   end
 
-  defp validate_handle!(%__MODULE__{owner: owner, id: id, proof: proof} = session)
-       when is_pid(owner) and is_reference(id) and is_binary(proof) do
-    if issued?(proof, owner, id) do
+  defp validate_handle!(%__MODULE__{owner: owner, id: id, status: status, proof: proof} = session)
+       when is_pid(owner) and is_reference(id) and is_reference(status) and is_binary(proof) do
+    if SessionIssuer.issued?(owner, id, status, proof) do
       if owner == self() do
         session
       else
@@ -83,10 +84,17 @@ defmodule Decibel.Session do
 
   defp fetch_state!(session) do
     case Process.get(storage_key(session), @missing) do
-      @missing -> raise SessionError, reason: :unknown
-      @closed -> raise SessionError, reason: :closed
+      @missing -> raise_missing_state!(session)
       %Handshake{} = state -> state
       %ChannelPair{} = state -> state
+    end
+  end
+
+  defp raise_missing_state!(session) do
+    if :atomics.get(session.status, 1) == @status_closed do
+      raise SessionError, reason: :closed
+    else
+      raise SessionError, reason: :unknown
     end
   end
 
@@ -110,35 +118,6 @@ defmodule Decibel.Session do
 
   defp phase(%Handshake{role: role, hs: [{next_role, _tokens} | _rest]}) do
     if role == next_role, do: :handshake_write, else: :handshake_read
-  end
-
-  defp issuance_proof(owner, id),
-    do: :crypto.mac(:hmac, :sha256, issuance_key(), :erlang.term_to_binary({owner, id}))
-
-  defp issued?(proof, owner, id) do
-    expected = issuance_proof(owner, id)
-    byte_size(proof) == byte_size(expected) and :crypto.hash_equals(proof, expected)
-  end
-
-  defp issuance_key do
-    case :persistent_term.get(@issuance_key, @missing) do
-      @missing -> initialize_issuance_key()
-      key -> key
-    end
-  end
-
-  defp initialize_issuance_key do
-    :global.trans({@issuance_key, self()}, fn ->
-      case :persistent_term.get(@issuance_key, @missing) do
-        @missing ->
-          key = :crypto.strong_rand_bytes(32)
-          :persistent_term.put(@issuance_key, key)
-          key
-
-        key ->
-          key
-      end
-    end)
   end
 
   defp storage_key(%__MODULE__{id: id}), do: {__MODULE__, id}
