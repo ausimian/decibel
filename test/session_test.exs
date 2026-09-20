@@ -61,11 +61,25 @@ defmodule Decibel.SessionTest do
       assert_session_error(call, :unknown, "Unknown Decibel session")
     end
 
-    never_issued = struct!(Session, owner: self(), id: make_ref())
+    invalid_proof = fn _owner, _id -> true end
+
+    never_issued =
+      struct!(Session, owner: self(), id: make_ref(), proof: invalid_proof)
 
     for {_operation, call} <- all_operations(never_issued) do
       assert_session_error(call, :unknown, "Unknown Decibel session")
     end
+
+    foreign_owner = spawn(fn -> receive do: (:stop -> :ok) end)
+
+    foreign_never_issued =
+      struct!(Session, owner: foreign_owner, id: make_ref(), proof: invalid_proof)
+
+    for {_operation, call} <- all_operations(foreign_never_issued) do
+      assert_session_error(call, :unknown, "Unknown Decibel session")
+    end
+
+    send(foreign_owner, :stop)
   end
 
   test "closing a handshake discards sensitive state and leaves a stable marker" do

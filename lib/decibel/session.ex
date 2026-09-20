@@ -18,10 +18,14 @@ defmodule Decibel.Session do
   @closed :closed
   @missing :missing
 
-  @enforce_keys [:owner, :id]
-  defstruct [:owner, :id]
+  @enforce_keys [:owner, :id, :proof]
+  defstruct [:owner, :id, :proof]
 
-  @opaque t :: %__MODULE__{owner: pid(), id: reference()}
+  @opaque t :: %__MODULE__{
+            owner: pid(),
+            id: reference(),
+            proof: (pid(), reference() -> boolean())
+          }
 
   @type phase :: SessionError.phase()
   @typep state :: Handshake.t() | ChannelPair.t()
@@ -29,7 +33,9 @@ defmodule Decibel.Session do
   @doc false
   @spec create(state()) :: t()
   def create(state) do
-    session = %__MODULE__{owner: self(), id: make_ref()}
+    owner = self()
+    id = make_ref()
+    session = %__MODULE__{owner: owner, id: id, proof: issuance_proof(owner, id)}
     Process.put(storage_key(session), state)
     session
   end
@@ -59,12 +65,16 @@ defmodule Decibel.Session do
     :ok
   end
 
-  defp validate_handle!(%__MODULE__{owner: owner, id: id} = session)
-       when is_pid(owner) and is_reference(id) do
-    if owner == self() do
-      session
+  defp validate_handle!(%__MODULE__{owner: owner, id: id, proof: proof} = session)
+       when is_pid(owner) and is_reference(id) and is_function(proof, 2) do
+    if issued?(proof, owner, id) do
+      if owner == self() do
+        session
+      else
+        raise SessionError, reason: :not_owner
+      end
     else
-      raise SessionError, reason: :not_owner
+      raise SessionError, reason: :unknown
     end
   end
 
@@ -99,6 +109,21 @@ defmodule Decibel.Session do
 
   defp phase(%Handshake{role: role, hs: [{next_role, _tokens} | _rest]}) do
     if role == next_role, do: :handshake_write, else: :handshake_read
+  end
+
+  defp issuance_proof(owner, id) do
+    fn candidate_owner, candidate_id ->
+      candidate_owner == owner and candidate_id == id
+    end
+  end
+
+  defp issued?(proof, owner, id) do
+    with {:module, __MODULE__} <- :erlang.fun_info(proof, :module),
+         {:type, :local} <- :erlang.fun_info(proof, :type) do
+      proof.(owner, id)
+    else
+      _other -> false
+    end
   end
 
   defp storage_key(%__MODULE__{id: id}), do: {__MODULE__, id}
