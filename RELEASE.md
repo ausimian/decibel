@@ -11,6 +11,9 @@
 
 ### Fixed
 
+- Validate all role-specific static key material, prologue data, and
+  construction options during session creation, raising stable field-level
+  errors before storing session state.
 - Reject malformed or non-canonical Noise protocol names, invalid modifier
   placements, and missing, malformed, or unused pre-shared keys during session
   creation instead of silently omitting PSK authentication.

@@ -88,7 +88,7 @@ defmodule Decibel do
   ```
   # In the IK handshake, the responder's public (static) key is known to the
   # initiator prior to the handshake.
-  keys = %{rs: <<...>>}
+  keys = %{s: {<<...>>, <<...>>}, rs: <<...>>}
   ini  = Decibel.new("Noise_IK_448_ChaChaPoly_BLAKE2b", :ini, keys)
   ```
 
@@ -186,7 +186,12 @@ defmodule Decibel do
       # handshake
       re = e.remote_keys[:re]
       # Now construct the new responder for the fallback protocol
-      rsp = Decibel.new("Noise_XXfallback_25519_ChaChaPoly_Blake2b", :rsp, %{re: re}, swap: :rsp)
+      rsp = Decibel.new(
+        "Noise_XXfallback_25519_ChaChaPoly_BLAKE2b",
+        :rsp,
+        %{re: re, s: responder_static},
+        swap: :rsp
+      )
       # Start the new handshake (not shown) ...
   end
   ```
@@ -243,6 +248,22 @@ defmodule Decibel do
   @typedoc "The role the party plays in the protocol."
   @type role :: :ini | :rsp
 
+  @typedoc "A public-private Diffie-Hellman keypair."
+  @type keypair :: {binary(), binary()}
+
+  @typedoc "Key material and prologue data used to initialize a handshake."
+  @type key_material :: %{
+          optional(:s) => keypair(),
+          optional(:rs) => binary(),
+          optional(:e) => keypair(),
+          optional(:re) => binary(),
+          optional(:psks) => [<<_::256>>],
+          optional(:prologue) => iodata()
+        }
+
+  @typedoc "An option used to initialize a handshake."
+  @type option :: {:swap, role()} | {:registry, module()}
+
   alias Decibel.{ChannelPair, Cipher, Handshake}
 
   @max_message_size 65_535
@@ -252,14 +273,17 @@ defmodule Decibel do
   Start a new handshake.
 
   The caller should provide a [protocol name](https://noiseprotocol.org/noise.html#protocol-names-and-modifiers)
-  and the role the caller will play in the protocol. The caller should provide any keys
-  required by the protocol prior to advancing the handshake. These are normally static
-  keys or pre-shared keys (PSKs). Local ephemeral keys for ordinary handshakes are
+  and the role the caller will play in the protocol. The caller must provide all keys
+  required by the protocol, including local static keys first used by later handshake
+  messages. These are normally static keys or pre-shared keys (PSKs). Local ephemeral
+  keys for ordinary handshakes are
   generated internally when their outbound `e` token is processed. The list of provided
   keys should be identified as follows:
 
-  - `:s`: the party's public-private static key pair as a tuple.
-  - `:rs`: the peer's public static key as a binary.
+  - `:s`: the party's public-private static key pair as a tuple. It is required
+    whenever the selected role uses a static key anywhere in the fully modified pattern.
+  - `:rs`: the peer's public static key as a binary, only when the peer has a
+    static pre-message.
   - `:e`: only for a fallback handshake where the caller sent the failed handshake's
   original ephemeral; the caller's public-private ephemeral key pair as a tuple.
   - `:re`: only for a fallback handshake where the peer sent the failed handshake's
@@ -267,6 +291,14 @@ defmodule Decibel do
   - `:psks`: a list of [pre-shared symmetric keys](https://noiseprotocol.org/noise.html#pre-shared-symmetric-keys)
   (as binaries), exactly one 32-byte key for each `pskN` modifier.
   - `:prologue`: any [prologue](https://noiseprotocol.org/noise.html#prologue) data
+    represented as iodata.
+
+  Public and private DH values must each have the exact length required by the
+  selected DH function: 32 bytes for `25519` or 56 bytes for `448`.
+
+  The supported options are `:swap`, whose value must be `:ini` or `:rsp`, and
+  `:registry`, whose value must be a module exporting `fetch!/1`. Each option may
+  appear at most once.
 
   Ephemeral keypairs belong to exactly one protocol run. They must never be shared
   across sessions, processes, or protocol names. The fallback inputs above reuse a key
@@ -279,15 +311,16 @@ defmodule Decibel do
   required by [Noise section 8.1](https://noiseprotocol.org/noise.html#handshake-pattern-name-section).
 
   Raises `ArgumentError` for malformed or unsupported protocol names, invalid
-  or non-canonical modifiers, impossible PSK placements, and PSK lists that do
-  not contain exactly one 32-byte key per modifier. It also raises `ArgumentError`
-  for caller-supplied ephemeral keys outside their role-specific fallback
-  pre-message or with lengths that do not match the selected DH function. Other
-  missing key material also raises an exception.
+  or non-canonical modifiers, impossible PSK placements, PSK lists that do not
+  contain exactly one 32-byte key per modifier, missing or malformed static key
+  material, invalid prologue iodata, and invalid options. It also raises
+  `ArgumentError` for caller-supplied ephemeral keys outside their role-specific
+  fallback pre-message or with lengths that do not match the selected DH
+  function. Validation completes before any session state is stored.
 
   Returns a reference representing the handshake.
   """
-  @spec new(String.t(), role(), map, keyword) :: reference()
+  @spec new(String.t(), role(), key_material(), [option()]) :: reference()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
     hs = Handshake.initialize(protocol_name, role, keys, opts, :safe)
     ref = make_ref()

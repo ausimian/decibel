@@ -10,6 +10,7 @@ defmodule Decibel.Utility do
   @type handshake_pattern :: {[handshake_message()], [handshake_message()]}
   @type parsed_handshake :: {String.t(), [modifier()]}
   @type parsed_protocol :: {parsed_handshake(), Crypto.curve(), Crypto.cipher(), Crypto.hash()}
+  @type static_key :: :s | :rs
 
   @max_protocol_name_size 255
   @name_section ~r/\A[A-Za-z0-9+\/]+\z/
@@ -68,25 +69,20 @@ defmodule Decibel.Utility do
     Enum.reduce(mods, {pre, post}, &apply_modifier/2)
   end
 
-  @spec has_premessage_keys(:ini | :rsp, list(), map()) :: boolean
-  def has_premessage_keys(_, [], _), do: true
-  def has_premessage_keys(_, _msgs, []), do: false
-  def has_premessage_keys(role, [{_, []} | msgs], keys), do: has_premessage_keys(role, msgs, keys)
+  @spec required_static_keys(Decibel.role(), handshake_pattern()) :: [static_key()]
+  def required_static_keys(role, {pre, messages}) when role in [:ini, :rsp] do
+    local_required? =
+      Enum.any?(pre ++ messages, fn {sender, tokens} ->
+        (sender == role and :s in tokens) or local_static_dh?(role, tokens)
+      end)
 
-  def has_premessage_keys(role, [{sender, [token | tokens]} | msgs], keys)
-      when role in [:ini, :rsp] and sender in [:ini, :rsp] do
-    reqd = required_premessage_key(token, role == sender)
+    remote_required? =
+      Enum.any?(pre, fn {sender, tokens} ->
+        sender != role and :s in tokens
+      end)
 
-    case Map.pop(keys, reqd) do
-      {{_pub, _priv}, new_keys} when reqd in [:e, :s] ->
-        has_premessage_keys(role, [{sender, tokens} | msgs], new_keys)
-
-      {pub, new_keys} when is_binary(pub) and reqd in [:re, :rs] ->
-        has_premessage_keys(role, [{sender, tokens} | msgs], new_keys)
-
-      _ ->
-        false
-    end
+    Enum.filter([s: local_required?, rs: remote_required?], &elem(&1, 1))
+    |> Keyword.keys()
   end
 
   @spec has_preshared_keys([handshake_message()], term()) :: boolean
@@ -115,10 +111,8 @@ defmodule Decibel.Utility do
   defp to_hash("BLAKE2b"), do: :blake2b
   defp to_hash(hash), do: invalid_protocol_name!("unsupported hash function #{inspect(hash)}")
 
-  defp required_premessage_key(:e, true), do: :e
-  defp required_premessage_key(:e, false), do: :re
-  defp required_premessage_key(:s, true), do: :s
-  defp required_premessage_key(:s, false), do: :rs
+  defp local_static_dh?(:ini, tokens), do: Enum.any?(tokens, &(&1 in [:se, :ss]))
+  defp local_static_dh?(:rsp, tokens), do: Enum.any?(tokens, &(&1 in [:es, :ss]))
 
   defp apply_modifier(:fallback, {pre, [{:ini, tokens} = first | rest]})
        when tokens in [[:e], [:s], [:e, :s]] do

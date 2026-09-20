@@ -59,6 +59,8 @@ defmodule VectorTest do
         # Run the fallback protocol using this ephemeral key
         vec
         |> Map.put("protocol_name", String.replace(initial_protocol, "Noise_IK", "Noise_XXfallback"))
+        # noise-c retains Bob's cached static from the failed IK attempt, but
+        # XXfallback has no remote static pre-message for the initiator.
         |> Map.delete("init_remote_static")
         |> Map.update!("messages", &tl/1)
         |> Map.put("resp_remote_ephemeral", Base.encode16(re, case: :lower))

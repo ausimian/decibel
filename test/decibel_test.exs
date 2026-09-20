@@ -21,9 +21,86 @@ defmodule DecibelTest do
       hash: "SHA512"
     }
   ]
+  @pattern_requirements [
+    {"N", %{ini: [:rs], rsp: [:s]}},
+    {"K", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"X", %{ini: [:s, :rs], rsp: [:s]}},
+    {"NN", %{ini: [], rsp: []}},
+    {"KN", %{ini: [:s], rsp: [:rs]}},
+    {"NK", %{ini: [:rs], rsp: [:s]}},
+    {"KK", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"NX", %{ini: [], rsp: [:s]}},
+    {"KX", %{ini: [:s], rsp: [:s, :rs]}},
+    {"XN", %{ini: [:s], rsp: []}},
+    {"IN", %{ini: [:s], rsp: []}},
+    {"XK", %{ini: [:s, :rs], rsp: [:s]}},
+    {"IK", %{ini: [:s, :rs], rsp: [:s]}},
+    {"XX", %{ini: [:s], rsp: [:s]}},
+    {"IX", %{ini: [:s], rsp: [:s]}},
+    {"NK1", %{ini: [:rs], rsp: [:s]}},
+    {"NX1", %{ini: [], rsp: [:s]}},
+    {"X1N", %{ini: [:s], rsp: []}},
+    {"X1K", %{ini: [:s, :rs], rsp: [:s]}},
+    {"XK1", %{ini: [:s, :rs], rsp: [:s]}},
+    {"X1K1", %{ini: [:s, :rs], rsp: [:s]}},
+    {"X1X", %{ini: [:s], rsp: [:s]}},
+    {"XX1", %{ini: [:s], rsp: [:s]}},
+    {"X1X1", %{ini: [:s], rsp: [:s]}},
+    {"K1N", %{ini: [:s], rsp: [:rs]}},
+    {"K1K", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"KK1", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"K1K1", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"K1X", %{ini: [:s], rsp: [:s, :rs]}},
+    {"KX1", %{ini: [:s], rsp: [:s, :rs]}},
+    {"K1X1", %{ini: [:s], rsp: [:s, :rs]}},
+    {"I1N", %{ini: [:s], rsp: []}},
+    {"I1K", %{ini: [:s, :rs], rsp: [:s]}},
+    {"IK1", %{ini: [:s, :rs], rsp: [:s]}},
+    {"I1K1", %{ini: [:s, :rs], rsp: [:s]}},
+    {"I1X", %{ini: [:s], rsp: [:s]}},
+    {"IX1", %{ini: [:s], rsp: [:s]}},
+    {"I1X1", %{ini: [:s], rsp: [:s]}}
+  ]
+  @fallback_requirements [
+    {"NNfallback", %{ini: [], rsp: []}},
+    {"KNfallback", %{ini: [:s], rsp: [:rs]}},
+    {"NXfallback", %{ini: [], rsp: [:s]}},
+    {"KXfallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"XNfallback", %{ini: [:s], rsp: []}},
+    {"INfallback", %{ini: [:s], rsp: [:rs]}},
+    {"XXfallback", %{ini: [:s], rsp: [:s]}},
+    {"IXfallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"NK1fallback", %{ini: [:rs], rsp: [:s]}},
+    {"NX1fallback", %{ini: [], rsp: [:s]}},
+    {"X1Nfallback", %{ini: [:s], rsp: []}},
+    {"XK1fallback", %{ini: [:s, :rs], rsp: [:s]}},
+    {"X1K1fallback", %{ini: [:s, :rs], rsp: [:s]}},
+    {"X1Xfallback", %{ini: [:s], rsp: [:s]}},
+    {"XX1fallback", %{ini: [:s], rsp: [:s]}},
+    {"X1X1fallback", %{ini: [:s], rsp: [:s]}},
+    {"K1Nfallback", %{ini: [:s], rsp: [:rs]}},
+    {"KK1fallback", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"K1K1fallback", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"K1Xfallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"KX1fallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"K1X1fallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"I1Nfallback", %{ini: [:s], rsp: [:rs]}},
+    {"IK1fallback", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"I1K1fallback", %{ini: [:s, :rs], rsp: [:s, :rs]}},
+    {"I1Xfallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"IX1fallback", %{ini: [:s], rsp: [:s, :rs]}},
+    {"I1X1fallback", %{ini: [:s], rsp: [:s, :rs]}}
+  ]
 
   defmodule EmptyRegistry do
     def fetch!(name), do: Map.fetch!(%{}, name)
+  end
+
+  defmodule NNRegistry do
+    def fetch!("NN"), do: [ini: [:e], rsp: [:e, :ee]]
+  end
+
+  defmodule MissingFetchRegistry do
   end
 
   test "Simple NN Test" do
@@ -309,13 +386,230 @@ defmodule DecibelTest do
     Decibel.close(rsp)
   end
 
-  test "Required static keys must be provided" do
-    assert_raise RuntimeError, fn -> Decibel.new("Noise_NK_25519_ChaChaPoly_BLAKE2s", :ini) end
-    assert_raise RuntimeError, fn -> Decibel.new("Noise_NK_25519_ChaChaPoly_BLAKE2s", :rsp) end
+  test "all base patterns validate role-specific static requirements" do
+    assert length(@pattern_requirements) == 38
 
-    {pub, priv} = :crypto.generate_key(:ecdh, :x25519)
-    Decibel.close(Decibel.new("Noise_NK_25519_ChaChaPoly_BLAKE2s", :ini, %{rs: pub}))
-    Decibel.close(Decibel.new("Noise_NK_25519_ChaChaPoly_BLAKE2s", :rsp, %{s: {pub, priv}}))
+    for {pattern, requirements_by_role} <- @pattern_requirements,
+        {role, requirements} <- requirements_by_role do
+      keys = static_key_material(role, requirements, :x25519)
+      ref = Decibel.new(protocol(pattern), role, keys)
+      Decibel.close(ref)
+
+      if :s in requirements do
+        assert_argument_error_without_session(
+          "local static key :s is required by the selected handshake pattern",
+          fn -> Decibel.new(protocol(pattern), role, Map.delete(keys, :s)) end
+        )
+      end
+
+      if :rs in requirements do
+        assert_argument_error_without_session(
+          "remote static key :rs is required by a pre-message",
+          fn -> Decibel.new(protocol(pattern), role, Map.delete(keys, :rs)) end
+        )
+      end
+    end
+  end
+
+  test "all base patterns preserve static requirements under psk0" do
+    psk = :crypto.strong_rand_bytes(32)
+
+    for {pattern, requirements_by_role} <- @pattern_requirements,
+        {role, requirements} <- requirements_by_role do
+      keys = role |> static_key_material(requirements, :x25519) |> Map.put(:psks, [psk])
+      ref = Decibel.new(protocol(pattern <> "psk0"), role, keys)
+      Decibel.close(ref)
+    end
+  end
+
+  test "all fallback patterns validate their fully modified requirements" do
+    assert length(@fallback_requirements) == 28
+
+    for {pattern, requirements_by_role} <- @fallback_requirements,
+        {role, requirements} <- requirements_by_role do
+      keys = fallback_key_material(role, requirements, :x25519)
+      ref = Decibel.new(protocol(pattern), role, keys, swap: :rsp)
+      Decibel.close(ref)
+
+      {ephemeral_field, ephemeral_error} =
+        case role do
+          :ini -> {:e, "fallback :e is required by a local pre-message"}
+          :rsp -> {:re, "fallback :re is required by a remote pre-message"}
+        end
+
+      assert_argument_error_without_session(ephemeral_error, fn ->
+        Decibel.new(protocol(pattern), role, Map.delete(keys, ephemeral_field), swap: :rsp)
+      end)
+
+      if :s in requirements do
+        assert_argument_error_without_session(
+          "local static key :s is required by the selected handshake pattern",
+          fn -> Decibel.new(protocol(pattern), role, Map.delete(keys, :s), swap: :rsp) end
+        )
+      end
+
+      if :rs in requirements do
+        assert_argument_error_without_session(
+          "remote static key :rs is required by a pre-message",
+          fn -> Decibel.new(protocol(pattern), role, Map.delete(keys, :rs), swap: :rsp) end
+        )
+      end
+    end
+  end
+
+  test "PSKs compose with e and e,s fallback pre-messages" do
+    psk = :crypto.strong_rand_bytes(32)
+
+    for {pattern, requirements_by_role} <- [
+          {"XXfallback+psk0", %{ini: [:s], rsp: [:s]}},
+          {"INfallback+psk0", %{ini: [:s], rsp: [:rs]}}
+        ],
+        {role, requirements} <- requirements_by_role do
+      keys = role |> fallback_key_material(requirements, :x25519) |> Map.put(:psks, [psk])
+      ref = Decibel.new(protocol(pattern), role, keys, swap: :rsp)
+      Decibel.close(ref)
+    end
+  end
+
+  test "static keypairs enforce shape and exact curve lengths" do
+    for suite <- @ephemeral_suites do
+      {public, private} = keypair = :crypto.generate_key(:ecdh, suite.curve)
+
+      error =
+        "local static key :s must be a keypair containing #{suite.dh_len}-byte public and private keys"
+
+      invalid_keypairs = [
+        :not_a_keypair,
+        public,
+        {public},
+        {public, private, :extra},
+        {public, :not_a_private_key},
+        {:not_a_public_key, private},
+        {:crypto.strong_rand_bytes(suite.dh_len - 1), private},
+        {:crypto.strong_rand_bytes(suite.dh_len + 1), private},
+        {public, :crypto.strong_rand_bytes(suite.dh_len - 1)},
+        {public, :crypto.strong_rand_bytes(suite.dh_len + 1)}
+      ]
+
+      for invalid <- invalid_keypairs do
+        assert_argument_error_without_session(error, fn ->
+          Decibel.new(suite_protocol("XX", suite), :ini, %{s: invalid})
+        end)
+      end
+
+      ref = Decibel.new(suite_protocol("XX", suite), :ini, %{s: keypair})
+      Decibel.close(ref)
+    end
+  end
+
+  test "remote static keys enforce pre-message compatibility and curve length" do
+    for suite <- @ephemeral_suites do
+      {public, _private} = :crypto.generate_key(:ecdh, suite.curve)
+      error = "remote static key :rs must be a #{suite.dh_len}-byte public key"
+
+      for invalid <- [
+            :not_a_public_key,
+            :crypto.strong_rand_bytes(suite.dh_len - 1),
+            :crypto.strong_rand_bytes(suite.dh_len + 1)
+          ] do
+        assert_argument_error_without_session(error, fn ->
+          Decibel.new(suite_protocol("N", suite), :ini, %{rs: invalid})
+        end)
+      end
+
+      ref = Decibel.new(suite_protocol("N", suite), :ini, %{rs: public})
+      Decibel.close(ref)
+
+      assert_argument_error_without_session(
+        "caller-supplied :rs is only permitted for a remote static pre-message",
+        fn -> Decibel.new(suite_protocol("NN", suite), :ini, %{rs: public}) end
+      )
+    end
+  end
+
+  test "static validation depends only on the selected DH function" do
+    for suite <- @ephemeral_suites,
+        cipher <- ["ChaChaPoly", "AESGCM"],
+        hash <- ["SHA256", "SHA512", "BLAKE2s", "BLAKE2b"] do
+      keys = static_key_material(:ini, [:s, :rs], suite.curve)
+      protocol = "Noise_K_#{suite.curve_name}_#{cipher}_#{hash}"
+      ref = Decibel.new(protocol, :ini, keys)
+      Decibel.close(ref)
+    end
+  end
+
+  test "prologue must be valid iodata" do
+    for prologue <- [<<>>, [], "binary", [0, [1, <<2, 3>>]], [<<1>> | <<2, 3>>]] do
+      ref = Decibel.new(protocol("NN"), :ini, %{prologue: prologue})
+      Decibel.close(ref)
+    end
+
+    for invalid <- [:atom, {:tuple}, 1.5, [256], [<<1>> | :not_a_binary_tail]] do
+      assert_argument_error_without_session("prologue must be valid iodata", fn ->
+        Decibel.new(protocol("NN"), :ini, %{prologue: invalid})
+      end)
+    end
+  end
+
+  test "construction options validate shape, uniqueness, and values" do
+    for opts <- [[], [swap: :ini], [swap: :rsp], [registry: NNRegistry]] do
+      ref = Decibel.new(protocol("NN"), :ini, %{}, opts)
+      Decibel.close(ref)
+    end
+
+    assert_argument_error_without_session("options must be a keyword list", fn ->
+      Decibel.new(protocol("NN"), :ini, %{}, :not_options)
+    end)
+
+    assert_argument_error_without_session("unsupported construction option: :bogus", fn ->
+      Decibel.new(protocol("NN"), :ini, %{}, bogus: true)
+    end)
+
+    assert_argument_error_without_session(
+      "construction option :swap may only be specified once",
+      fn -> Decibel.new(protocol("NN"), :ini, %{}, swap: :ini, swap: :rsp) end
+    )
+
+    assert_argument_error_without_session(
+      "construction option :registry may only be specified once",
+      fn ->
+        Decibel.new(protocol("NN"), :ini, %{}, registry: NNRegistry, registry: Decibel.Registry)
+      end
+    )
+
+    for invalid <- [:invalid, nil, "ini"] do
+      assert_argument_error_without_session(
+        "construction option :swap must be :ini or :rsp",
+        fn -> Decibel.new(protocol("NN"), :ini, %{}, swap: invalid) end
+      )
+    end
+
+    for invalid <- ["Decibel.Registry", DecibelTest.NotLoadedRegistry, MissingFetchRegistry] do
+      assert_argument_error_without_session(
+        "construction option :registry must be a module exporting fetch!/1",
+        fn -> Decibel.new(protocol("NN"), :ini, %{}, registry: invalid) end
+      )
+    end
+  end
+
+  test "constructor preserves protocol, ephemeral, and PSK error precedence" do
+    invalid_protocol = "Noise_NNpsk01_25519_ChaChaPoly_BLAKE2s"
+
+    assert_argument_error_without_session(
+      "invalid Noise protocol name: unsupported modifier \"psk01\"",
+      fn -> Decibel.new(invalid_protocol, :ini, %{e: :invalid, psks: []}, bogus: true) end
+    )
+
+    ephemeral = :crypto.generate_key(:ecdh, :x25519)
+
+    assert_argument_error_without_session(
+      "caller-supplied :e is only permitted for a local fallback pre-message",
+      fn -> Decibel.new(protocol("NNpsk0"), :ini, %{e: ephemeral}) end
+    )
+
+    assert_argument_error_without_session(@invalid_psks, fn ->
+      Decibel.new(protocol("XXpsk0"), :ini)
+    end)
   end
 
   test "Required preshared keys must be provided" do
@@ -324,11 +618,11 @@ defmodule DecibelTest do
     psk2 = :crypto.strong_rand_bytes(32)
     protocol = "Noise_NKpsk0+psk2_25519_ChaChaPoly_BLAKE2s"
 
-    assert_raise ArgumentError, @invalid_psks, fn -> Decibel.new(protocol, :ini, %{rs: pub}) end
+    assert_argument_error_without_session(@invalid_psks, fn -> Decibel.new(protocol, :ini, %{rs: pub}) end)
 
-    assert_raise ArgumentError, @invalid_psks, fn ->
+    assert_argument_error_without_session(@invalid_psks, fn ->
       Decibel.new(protocol, :ini, %{rs: pub, psks: [psk0]})
-    end
+    end)
 
     for invalid <- [
           [psk0, psk2, :crypto.strong_rand_bytes(32)],
@@ -337,21 +631,22 @@ defmodule DecibelTest do
           [psk0, :invalid],
           :not_a_list
         ] do
-      assert_raise ArgumentError, @invalid_psks, fn ->
+      assert_argument_error_without_session(@invalid_psks, fn ->
         Decibel.new(protocol, :ini, %{rs: pub, psks: invalid})
-      end
+      end)
     end
 
     Decibel.close(Decibel.new(protocol, :ini, %{rs: pub, psks: [psk0, psk2]}))
 
-    assert_raise ArgumentError, @invalid_psks, fn ->
+    assert_argument_error_without_session(@invalid_psks, fn ->
       Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini, %{psks: [psk0]})
-    end
+    end)
   end
 
   test "PSK indices are bounded by each handshake pattern" do
     {responder_static, _private} = :crypto.generate_key(:ecdh, :x25519)
     initiator_static = :crypto.generate_key(:ecdh, :x25519)
+    fallback_static = :crypto.generate_key(:ecdh, :x25519)
     psk = :crypto.strong_rand_bytes(32)
 
     for pattern <- ["Npsk0", "Npsk1"] do
@@ -370,7 +665,7 @@ defmodule DecibelTest do
     end
 
     for pattern <- ["XXfallback+psk0", "XXfallback+psk2"] do
-      ref = Decibel.new(protocol(pattern), :rsp, %{re: responder_static, psks: [psk]})
+      ref = Decibel.new(protocol(pattern), :rsp, %{re: responder_static, s: fallback_static, psks: [psk]})
       Decibel.close(ref)
     end
 
@@ -384,12 +679,25 @@ defmodule DecibelTest do
   test "fallback validates the current first message and composes sequentially" do
     remote_ephemeral = :crypto.strong_rand_bytes(32)
     remote_static = :crypto.strong_rand_bytes(32)
+    local_static = :crypto.generate_key(:ecdh, :x25519)
     psk = :crypto.strong_rand_bytes(32)
 
-    ref = Decibel.new(protocol("IXfallback"), :rsp, %{re: remote_ephemeral, rs: remote_static})
+    ref =
+      Decibel.new(protocol("IXfallback"), :rsp, %{
+        re: remote_ephemeral,
+        rs: remote_static,
+        s: local_static
+      })
+
     Decibel.close(ref)
 
-    ref = Decibel.new(protocol("XXpsk2+fallback"), :rsp, %{re: remote_ephemeral, psks: [psk]})
+    ref =
+      Decibel.new(protocol("XXpsk2+fallback"), :rsp, %{
+        re: remote_ephemeral,
+        s: local_static,
+        psks: [psk]
+      })
+
     Decibel.close(ref)
 
     for pattern <- ["NKfallback", "XXpsk0+fallback", "XXpsk1+fallback"] do
@@ -612,6 +920,29 @@ defmodule DecibelTest do
       {_key, _value} -> false
     end)
     |> Map.new()
+  end
+
+  defp static_key_material(role, requirements, curve) do
+    {initiator_public, _initiator_private} = initiator_static = :crypto.generate_key(:ecdh, curve)
+    {responder_public, _responder_private} = responder_static = :crypto.generate_key(:ecdh, curve)
+
+    Enum.reduce(requirements, %{}, fn
+      :s, keys ->
+        Map.put(keys, :s, if(role == :ini, do: initiator_static, else: responder_static))
+
+      :rs, keys ->
+        Map.put(keys, :rs, if(role == :ini, do: responder_public, else: initiator_public))
+    end)
+  end
+
+  defp fallback_key_material(role, requirements, curve) do
+    {prior_public, _prior_private} = prior_ephemeral = :crypto.generate_key(:ecdh, curve)
+    keys = static_key_material(role, requirements, curve)
+
+    case role do
+      :ini -> Map.put(keys, :e, prior_ephemeral)
+      :rsp -> Map.put(keys, :re, prior_public)
+    end
   end
 
   defp establish_session(cipher) do

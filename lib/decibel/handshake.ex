@@ -32,41 +32,48 @@ defmodule Decibel.Handshake do
     # Parse the protocol name to get the constituent parts
     {{hs_name, mods}, curve, cipher, hash} = Utility.parse_protocol_name(protocol_name)
     # Look up the handshake in the registry and apply any modifications
-    reg = Keyword.get(opts, :registry, Decibel.Registry)
+    registry = registry_option!(opts)
 
     {pre, hs} =
-      reg
+      registry
       |> fetch_handshake!(hs_name)
       |> Utility.split_handshake()
       |> Utility.modify_handshake(mods)
 
     {e, unsafe_ephemeral, re} = prepare_ephemeral_keys!(pre, mods, role, curve, keys, mode)
 
-    # Check that any keys implied by the pre-message handshake are present
-    Utility.has_premessage_keys(role, pre, keys) || raise "Missing pre-message keys"
+    # Preserve pre-message and PSK validation precedence while extending the
+    # static-key check across the fully modified handshake pattern.
+    key_length = Crypto.dh_len(curve)
+    pre_requirements = Utility.required_static_keys(role, {pre, []})
+    validate_required_static_keys!(pre_requirements, key_length, keys)
     # Check that any pre-shared keys are present
     psks = Map.get(keys, :psks, [])
     Utility.has_preshared_keys(hs, psks) || raise ArgumentError, @invalid_psks
+
+    swap = validate_options!(opts)
+    {s, rs} = prepare_static_keys!(Utility.required_static_keys(role, {pre, hs}), key_length, keys)
+    prologue = validate_prologue!(Map.get(keys, :prologue, []))
 
     # Construct a new symmetric ciper, mixing any prologue and pre-message public keys
     # into the hash
     sym =
       Symmetric.initialize(cipher, hash, protocol_name)
-      |> Symmetric.mix_hash(Map.get(keys, :prologue, []))
+      |> Symmetric.mix_hash(prologue)
 
     %__MODULE__{
       role: role,
       sym: sym,
       dh: curve,
-      s: keys[:s],
+      s: s,
       e: e,
       unsafe_ephemeral: unsafe_ephemeral,
       re: re,
-      rs: keys[:rs],
+      rs: rs,
       psks: psks,
       pskf: psks != [],
       hs: hs,
-      swap: Keyword.get(opts, :swap, :ini),
+      swap: swap,
       mode: if(hs_name in ["N", "K", "X"], do: :one_way, else: :interactive)
     }
     |> mix_premessage_public_keys(pre)
@@ -238,7 +245,65 @@ defmodule Decibel.Handshake do
     {e, unsafe_ephemeral, re}
   end
 
-  defp prepare_local_ephemeral!(:error, _mode, _local_premessage?, _key_length), do: {nil, nil}
+  defp prepare_static_keys!(required, key_length, keys) do
+    s =
+      case Map.fetch(keys, :s) do
+        {:ok, value} -> validate_keypair!(value, key_length, "local static key :s")
+        :error -> required_static_key!(required, :s)
+      end
+
+    rs =
+      case Map.fetch(keys, :rs) do
+        {:ok, value} -> prepare_remote_static!(value, required, key_length)
+        :error -> required_static_key!(required, :rs)
+      end
+
+    {s, rs}
+  end
+
+  defp prepare_remote_static!(value, required, key_length) do
+    if :rs in required do
+      validate_public_key!(value, key_length, "remote static key :rs")
+    else
+      raise ArgumentError, "caller-supplied :rs is only permitted for a remote static pre-message"
+    end
+  end
+
+  defp required_static_key!(required, :s) do
+    if :s in required do
+      raise ArgumentError, "local static key :s is required by the selected handshake pattern"
+    end
+  end
+
+  defp required_static_key!(required, :rs) do
+    if :rs in required do
+      raise ArgumentError, "remote static key :rs is required by a pre-message"
+    end
+  end
+
+  defp validate_required_static_keys!(required, key_length, keys) do
+    if :s in required do
+      case Map.fetch(keys, :s) do
+        {:ok, value} -> validate_keypair!(value, key_length, "local static key :s")
+        :error -> raise ArgumentError, "local static key :s is required by the selected handshake pattern"
+      end
+    end
+
+    if :rs in required do
+      case Map.fetch(keys, :rs) do
+        {:ok, value} -> validate_public_key!(value, key_length, "remote static key :rs")
+        :error -> raise ArgumentError, "remote static key :rs is required by a pre-message"
+      end
+    end
+
+    :ok
+  end
+
+  defp prepare_local_ephemeral!(:error, _mode, true, _key_length) do
+    raise ArgumentError, "fallback :e is required by a local pre-message"
+  end
+
+  defp prepare_local_ephemeral!(:error, _mode, false, _key_length), do: {nil, nil}
 
   defp prepare_local_ephemeral!({:ok, e}, _mode, true, key_length) do
     {validate_keypair!(e, key_length, "fallback :e"), nil}
@@ -253,10 +318,14 @@ defmodule Decibel.Handshake do
     {nil, validate_keypair!(e, key_length, "unsafe :e")}
   end
 
-  defp prepare_remote_ephemeral!(:error, _remote_premessage?, _key_length), do: nil
+  defp prepare_remote_ephemeral!(:error, true, _key_length) do
+    raise ArgumentError, "fallback :re is required by a remote pre-message"
+  end
+
+  defp prepare_remote_ephemeral!(:error, false, _key_length), do: nil
 
   defp prepare_remote_ephemeral!({:ok, re}, true, key_length) do
-    validate_public_key!(re, key_length)
+    validate_public_key!(re, key_length, "fallback :re")
   end
 
   defp prepare_remote_ephemeral!({:ok, _re}, false, _key_length) do
@@ -285,13 +354,65 @@ defmodule Decibel.Handshake do
           "#{description} must be a keypair containing #{key_length}-byte public and private keys"
   end
 
-  defp validate_public_key!(public, key_length)
+  defp validate_public_key!(public, key_length, _description)
        when is_binary(public) and byte_size(public) == key_length do
     public
   end
 
-  defp validate_public_key!(_public, key_length) do
-    raise ArgumentError, "fallback :re must be a #{key_length}-byte public key"
+  defp validate_public_key!(_public, key_length, description) do
+    raise ArgumentError, "#{description} must be a #{key_length}-byte public key"
+  end
+
+  defp registry_option!(opts) do
+    Keyword.keyword?(opts) || raise ArgumentError, "options must be a keyword list"
+
+    case Keyword.get_values(opts, :registry) do
+      [] ->
+        Decibel.Registry
+
+      [registry] ->
+        validate_registry!(registry)
+
+      _registries ->
+        raise ArgumentError, "construction option :registry may only be specified once"
+    end
+  end
+
+  defp validate_options!(opts) do
+    case Enum.find(Keyword.keys(opts), &(&1 not in [:registry, :swap])) do
+      nil -> :ok
+      key -> raise ArgumentError, "unsupported construction option: #{inspect(key)}"
+    end
+
+    case Enum.find([:registry, :swap], &(length(Keyword.get_values(opts, &1)) > 1)) do
+      nil -> :ok
+      key -> raise ArgumentError, "construction option #{inspect(key)} may only be specified once"
+    end
+
+    case Keyword.get(opts, :swap, :ini) do
+      swap when swap in [:ini, :rsp] -> swap
+      _swap -> raise ArgumentError, "construction option :swap must be :ini or :rsp"
+    end
+  end
+
+  defp validate_registry!(registry) when is_atom(registry) do
+    if Code.ensure_loaded?(registry) and function_exported?(registry, :fetch!, 1) do
+      registry
+    else
+      raise ArgumentError, "construction option :registry must be a module exporting fetch!/1"
+    end
+  end
+
+  defp validate_registry!(_registry) do
+    raise ArgumentError, "construction option :registry must be a module exporting fetch!/1"
+  end
+
+  defp validate_prologue!(prologue) do
+    :erlang.iolist_size(prologue)
+    prologue
+  rescue
+    _error in ArgumentError ->
+      reraise ArgumentError, [message: "prologue must be valid iodata"], __STACKTRACE__
   end
 
   defp has_key?(%Symmetric{cs: %Cipher{k: k}}), do: k != nil
