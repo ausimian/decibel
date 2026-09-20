@@ -67,7 +67,7 @@ defmodule Decibel.ConnectionlessTest do
 
       packets =
         for nonce <- 0..65, into: %{} do
-          assert nonce == Decibel.get_nonce(sender, :out)
+          assert nonce == Decibel.nonce(sender, :out)
           aad = <<nonce::unsigned-little-64>>
           ciphertext = Decibel.encrypt(sender, "packet #{nonce}", aad)
           {nonce, {ciphertext, aad}}
@@ -84,7 +84,7 @@ defmodule Decibel.ConnectionlessTest do
       assert {:ok, "packet 2", window} =
                ConnectionlessReplayWindow.decrypt(recipient, 2, ciphertext2, aad2, window)
 
-      recipient_nonce = Decibel.get_nonce(recipient, :in)
+      recipient_nonce = Decibel.nonce(recipient, :in)
 
       assert {:error, :duplicate, ^window} =
                ConnectionlessReplayWindow.decrypt(recipient, 65, ciphertext65, aad65, window)
@@ -94,7 +94,7 @@ defmodule Decibel.ConnectionlessTest do
       assert {:error, :stale, ^window} =
                ConnectionlessReplayWindow.decrypt(recipient, 1, ciphertext1, aad1, window)
 
-      assert Decibel.get_nonce(recipient, :in) == recipient_nonce
+      assert Decibel.nonce(recipient, :in) == recipient_nonce
 
       {ciphertext3, aad3} = packets[3]
       tampered3 = flip_first_bit(ciphertext3)
@@ -105,7 +105,7 @@ defmodule Decibel.ConnectionlessTest do
       assert {:ok, "packet 3", window} =
                ConnectionlessReplayWindow.decrypt(recipient, 3, ciphertext3, aad3, window)
 
-      recipient_nonce = Decibel.get_nonce(recipient, :in)
+      recipient_nonce = Decibel.nonce(recipient, :in)
 
       for invalid <- [-1, @reserved_nonce, @past_reserved_nonce, :not_a_nonce] do
         error =
@@ -114,17 +114,17 @@ defmodule Decibel.ConnectionlessTest do
           end
 
         assert error.reason == :out_of_range
-        assert Decibel.get_nonce(recipient, :in) == recipient_nonce
+        assert Decibel.nonce(recipient, :in) == recipient_nonce
       end
 
-      sender_nonce = Decibel.get_nonce(sender, :out)
-      recipient_nonce = Decibel.get_nonce(recipient, :in)
+      sender_nonce = Decibel.nonce(sender, :out)
+      recipient_nonce = Decibel.nonce(recipient, :in)
       assert :ok == Decibel.rekey(sender, :out)
       assert :ok == Decibel.rekey(recipient, :in)
-      assert sender_nonce == Decibel.get_nonce(sender, :out)
-      assert recipient_nonce == Decibel.get_nonce(recipient, :in)
+      assert sender_nonce == Decibel.nonce(sender, :out)
+      assert recipient_nonce == Decibel.nonce(recipient, :in)
 
-      nonce66 = Decibel.get_nonce(sender, :out)
+      nonce66 = Decibel.nonce(sender, :out)
       aad66 = <<nonce66::unsigned-little-64>>
       ciphertext66 = Decibel.encrypt(sender, "packet after rekey", aad66)
 
