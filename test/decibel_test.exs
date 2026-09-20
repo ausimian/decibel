@@ -184,6 +184,9 @@ defmodule DecibelTest do
           swap: :rsp
         )
 
+      assert Process.get(ini).e == prior_ephemeral
+      assert Process.get(rsp).re == prior_public
+
       response = rsp |> Decibel.handshake_encrypt() |> IO.iodata_to_binary()
       refute binary_part(response, 0, suite.dh_len) == prior_public
       assert "" == Decibel.handshake_decrypt(ini, response)

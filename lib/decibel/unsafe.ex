@@ -7,13 +7,14 @@
 defmodule Decibel.Unsafe do
   @moduledoc false
 
-  alias Decibel.{Handshake, Session}
+  alias Decibel.Handshake
 
   @doc false
-  @spec new(String.t(), Decibel.role(), map(), keyword()) :: Decibel.session()
+  @spec new(String.t(), Decibel.role(), map(), keyword()) :: reference()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
-    protocol_name
-    |> Handshake.initialize(role, keys, opts, :unsafe_test_ephemeral)
-    |> Session.create()
+    hs = Handshake.initialize(protocol_name, role, keys, opts, :unsafe_test_ephemeral)
+    ref = make_ref()
+    Process.put(ref, hs)
+    ref
   end
 end
