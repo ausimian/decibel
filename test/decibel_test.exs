@@ -376,8 +376,6 @@ defmodule DecibelTest do
     assert :ok == Decibel.set_nonce(rsp, :in, 1)
     assert 1 == Decibel.get_nonce(ini, :out)
     assert 1 == Decibel.get_nonce(rsp, :in)
-    assert :ok == Decibel.set_nonce(ini, :out, 0)
-    assert :ok == Decibel.set_nonce(rsp, :in, 0)
     assert :ok == Decibel.rekey(ini, :out)
     assert :ok == Decibel.rekey(rsp, :in)
     assert "after rekey" == Decibel.decrypt(rsp, Decibel.encrypt(ini, "after rekey"))

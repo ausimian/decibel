@@ -42,8 +42,61 @@ defmodule Decibel.NonceTest do
 
           assert error.reason == :out_of_range
           assert error.nonce == invalid
+          assert error.current_nonce == nil
           assert @final_usable_nonce == Decibel.get_nonce(ref, direction)
         end
+      end
+
+      Decibel.close(ini)
+      Decibel.close(rsp)
+    end
+
+    test "#{cipher} rejects outbound nonce rewinds without changing state" do
+      {ini, rsp} = establish_session(unquote(protocol))
+
+      for ref <- [ini, rsp] do
+        assert :ok == Decibel.set_nonce(ref, :out, 5)
+        assert :ok == Decibel.set_nonce(ref, :out, 5)
+        assert 5 == Decibel.get_nonce(ref, :out)
+
+        assert :ok == Decibel.rekey(ref, :out)
+        assert 5 == Decibel.get_nonce(ref, :out)
+
+        error =
+          assert_raise Decibel.NonceError,
+                       "Outbound nonce cannot move backwards from 5 to 4",
+                       fn -> Decibel.set_nonce(ref, :out, 4) end
+
+        assert error.reason == :rewind
+        assert error.nonce == 4
+        assert error.current_nonce == 5
+        assert 5 == Decibel.get_nonce(ref, :out)
+
+        for invalid <- [-1, @reserved_nonce, @past_reserved_nonce, :not_a_nonce] do
+          error =
+            assert_raise Decibel.NonceError, fn ->
+              Decibel.set_nonce(ref, :out, invalid)
+            end
+
+          assert error.reason == :out_of_range
+          assert error.nonce == invalid
+          assert error.current_nonce == nil
+          assert 5 == Decibel.get_nonce(ref, :out)
+        end
+
+        assert :ok == Decibel.set_nonce(ref, :out, @final_usable_nonce)
+        _ciphertext = Decibel.encrypt(ref, "final outbound nonce")
+        assert @reserved_nonce == Decibel.get_nonce(ref, :out)
+
+        error =
+          assert_raise Decibel.NonceError,
+                       "Outbound nonce cannot move backwards from 18446744073709551615 to 0",
+                       fn -> Decibel.set_nonce(ref, :out, 0) end
+
+        assert error.reason == :rewind
+        assert error.nonce == 0
+        assert error.current_nonce == @reserved_nonce
+        assert @reserved_nonce == Decibel.get_nonce(ref, :out)
       end
 
       Decibel.close(ini)
@@ -96,6 +149,7 @@ defmodule Decibel.NonceTest do
     error = assert_raise Decibel.NonceError, "Cipher nonce is exhausted", operation
     assert error.reason == :exhausted
     assert error.nonce == @reserved_nonce
+    assert error.current_nonce == nil
   end
 
   defp establish_session(protocol) do
