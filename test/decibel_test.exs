@@ -72,7 +72,7 @@ defmodule DecibelTest do
 
     plaintext = :crypto.strong_rand_bytes(32_768)
     msg1 = Decibel.encrypt(ini, plaintext, "my random aad")
-    assert_raise Decibel.DecryptionError, fn -> Decibel.decrypt(rsp, flip_first_two_bytes(msg1), "my random aad") end
+    assert_raise Decibel.DecryptionError, fn -> Decibel.decrypt(rsp, flip_first_bit(msg1), "my random aad") end
 
     Decibel.close(ini)
     Decibel.close(rsp)
@@ -210,8 +210,8 @@ defmodule DecibelTest do
     Decibel.close(rsp)
   end
 
-  defp flip_first_two_bytes(<<fst, snd, rest::binary>>), do: <<snd, fst, rest::binary>>
-  defp flip_first_two_bytes(iodata), do: flip_first_two_bytes(IO.iodata_to_binary(iodata))
+  defp flip_first_bit(<<first, rest::binary>>), do: <<Bitwise.bxor(first, 1), rest::binary>>
+  defp flip_first_bit(iodata), do: flip_first_bit(IO.iodata_to_binary(iodata))
 
   defp establish_session(cipher) do
     protocol = "Noise_NN_25519_#{cipher}_BLAKE2s"
