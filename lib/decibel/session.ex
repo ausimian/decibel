@@ -9,6 +9,11 @@ defmodule Decibel.Session do
   `:decibel` OTP application stops. The owner's operations on a closed handle
   use `reason: :closed` while that application lifetime continues.
 
+  Stopping the application invalidates every session immediately. Owner-local
+  state from the inactive application generation is erased when that owner next
+  calls Decibel or when the owner process exits, because a process dictionary
+  cannot be modified by another process.
+
   Their fields are private implementation details and must not be inspected or
   constructed by callers. See `Decibel`'s **Ownership and lifetime** section for
   the complete concurrency, supervision, phase, and lifecycle contract.
@@ -36,6 +41,7 @@ defmodule Decibel.Session do
   @doc false
   @spec create(state()) :: t()
   def create(state) do
+    purge_inactive_sessions()
     owner = self()
     {id, status, generation, proof} = SessionKeys.issue()
 
@@ -76,7 +82,7 @@ defmodule Decibel.Session do
       Process.put(storage_key(session), {status, generation, proof, state})
       state
     else
-      Process.delete(storage_key(session))
+      purge_generation(generation)
       raise SessionError, reason: :unknown
     end
   end
@@ -141,10 +147,37 @@ defmodule Decibel.Session do
     if SessionKeys.active_generation?(generation) do
       session
     else
-      Process.delete(storage_key(session))
+      purge_generation(generation)
       raise SessionError, reason: :unknown
     end
   end
+
+  defp purge_inactive_sessions do
+    Enum.each(Process.get(), fn
+      {{__MODULE__, _id} = key, {_status, generation, _proof, state}}
+      when is_reference(generation) ->
+        if session_state?(state) and not SessionKeys.active_generation?(generation) do
+          Process.delete(key)
+        end
+
+      _other ->
+        :ok
+    end)
+  end
+
+  defp purge_generation(generation) do
+    Enum.each(Process.get(), fn
+      {{__MODULE__, _id} = key, {_status, ^generation, _proof, state}} ->
+        if session_state?(state), do: Process.delete(key)
+
+      _other ->
+        :ok
+    end)
+  end
+
+  defp session_state?(%Handshake{}), do: true
+  defp session_state?(%ChannelPair{}), do: true
+  defp session_state?(_state), do: false
 
   defp validate_foreign_handle!(session) do
     if issued?(session) do

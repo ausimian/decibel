@@ -155,6 +155,7 @@ defmodule Decibel.SessionTest do
 
   test "stopping the application invalidates sessions retained by their owner" do
     session = Decibel.new(@nn_protocol, :ini)
+    sibling = Decibel.new(@nn_protocol, :ini)
 
     on_exit(fn -> Application.ensure_all_started(:decibel) end)
 
@@ -176,11 +177,40 @@ defmodule Decibel.SessionTest do
 
     assert {:ok, _started} = Application.ensure_all_started(:decibel)
 
-    for {_operation, call} <- all_operations(session) do
-      assert_session_error(call, :unknown, "Unknown Decibel session")
-    end
+    for invalidated <- [session, sibling],
+        {_operation, call} <- all_operations(invalidated),
+        do: assert_session_error(call, :unknown, "Unknown Decibel session")
 
     replacement = Decibel.new(@nn_protocol, :ini)
+    assert :ok == Decibel.close(replacement)
+  end
+
+  test "creating a session purges retained state from inactive generations" do
+    old_sessions = for _index <- 1..3, do: Decibel.new(@nn_protocol, :ini)
+
+    on_exit(fn -> Application.ensure_all_started(:decibel) end)
+
+    assert :ok == Application.stop(:decibel)
+    assert {:ok, _started} = Application.ensure_all_started(:decibel)
+
+    replacement = Decibel.new(@nn_protocol, :ini)
+
+    session_entries =
+      Enum.filter(Process.get(), fn
+        {{Session, _id}, _state} -> true
+        {_key, _value} -> false
+      end)
+
+    assert [_replacement_entry] = session_entries
+
+    for old_session <- old_sessions do
+      assert_session_error(
+        fn -> Decibel.get_handshake_hash(old_session) end,
+        :unknown,
+        "Unknown Decibel session"
+      )
+    end
+
     assert :ok == Decibel.close(replacement)
   end
 

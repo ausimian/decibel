@@ -248,7 +248,9 @@ defmodule Decibel do
   Applications must likewise keep `:decibel` started while sessions are live;
   stopping the application ends every session lifetime, and handles retained
   across a later application start are unknown rather than transferable or
-  recoverable sessions.
+  recoverable sessions. Because only a process can alter its own process
+  dictionary, owner-local state from that application generation is erased when
+  the owner next calls Decibel or when the owner process exits.
 
   Decibel does not support session ownership transfer. Using a genuine handle
   in another process raises `Decibel.SessionError` with `reason: :not_owner`,
