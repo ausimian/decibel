@@ -487,7 +487,10 @@ defmodule Decibel do
   @typedoc "An option used to initialize a handshake."
   @type option :: {:swap, role()} | {:registry, module()}
 
-  alias Decibel.{ChannelPair, Cipher, Handshake}
+  @typedoc "An opaque, process-owned Noise session handle."
+  @type session :: Decibel.Session.t()
+
+  alias Decibel.{ChannelPair, Cipher, Handshake, Session}
 
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
@@ -545,14 +548,12 @@ defmodule Decibel do
   fallback pre-message or with lengths that do not match the selected DH
   function. Validation completes before any session state is stored.
 
-  Returns a reference representing the handshake.
+  Returns an opaque session handle representing the handshake.
   """
-  @spec new(String.t(), role(), key_material(), [option()]) :: reference()
+  @spec new(String.t(), role(), key_material(), [option()]) :: session()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
     hs = Handshake.initialize(protocol_name, role, keys, opts, :safe)
-    ref = make_ref()
-    Process.put(ref, hs)
-    ref
+    Session.create(hs)
   end
 
   @doc """
@@ -578,12 +579,13 @@ defmodule Decibel do
   `Decibel.DecryptionError` with `reason: :invalid_public_key`. The session state
   remains unchanged so the caller can abandon the handshake cleanly.
   """
-  @spec handshake_encrypt(reference(), iodata()) :: iodata()
-  def handshake_encrypt(ref, plaintext \\ []) when is_reference(ref) do
+  @spec handshake_encrypt(session(), iodata()) :: iodata()
+  def handshake_encrypt(session, plaintext \\ []) do
+    hs = Session.fetch!(session, :handshake_encrypt, :handshake_write)
     validate_size!(plaintext, @max_message_size, "handshake plaintext")
-    {hs, ciphertext} = Handshake.write_message(Process.get(ref), plaintext)
+    {hs, ciphertext} = Handshake.write_message(hs, plaintext)
     validate_size!(ciphertext, @max_message_size, "handshake message")
-    Process.put(ref, hs)
+    Session.store!(session, hs)
     ciphertext
   end
 
@@ -600,22 +602,26 @@ defmodule Decibel do
   See [Failure handling](#module-failure-handling) before deciding whether to
   abandon the handshake or enter a reviewed fallback protocol.
   """
-  @spec handshake_decrypt(reference(), iodata()) :: iodata()
-  def handshake_decrypt(ref, ciphertext) when is_reference(ref) do
+  @spec handshake_decrypt(session(), iodata()) :: iodata()
+  def handshake_decrypt(session, ciphertext) do
+    hs = Session.fetch!(session, :handshake_decrypt, :handshake_read)
     validate_size!(ciphertext, @max_message_size, "handshake message")
-    {hs, plaintext} = Handshake.read_message(Process.get(ref), ciphertext)
-    Process.put(ref, hs)
+    {hs, plaintext} = Handshake.read_message(hs, ciphertext)
+    Session.store!(session, hs)
     plaintext
   end
 
   @doc """
   Returns `true` if the handshake is complete, `false` otherwise.
   """
-  @spec is_handshake_complete?(reference()) :: boolean()
+  @spec is_handshake_complete?(session()) :: boolean()
   # Keep the established public API name for backwards compatibility.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
-  def is_handshake_complete?(ref) do
-    !!get_handshake_hash(ref)
+  def is_handshake_complete?(session) do
+    case Session.fetch!(session, :is_handshake_complete, :any) do
+      %Handshake{} -> false
+      %ChannelPair{} -> true
+    end
   end
 
   @doc """
@@ -623,9 +629,9 @@ defmodule Decibel do
 
   Returns `nil` if the handshake is not yet completed.
   """
-  @spec get_handshake_hash(reference()) :: binary() | nil
-  def get_handshake_hash(ref) when is_reference(ref) do
-    case Process.get(ref) do
+  @spec get_handshake_hash(session()) :: binary() | nil
+  def get_handshake_hash(session) do
+    case Session.fetch!(session, :get_handshake_hash, :any) do
       %Handshake{} -> nil
       %ChannelPair{} = cp -> ChannelPair.get_hash(cp)
     end
@@ -649,11 +655,12 @@ defmodule Decibel do
   Raises `Decibel.NonceError` without changing state if the outbound channel's
   nonce is exhausted.
   """
-  @spec encrypt(reference(), iodata(), iodata()) :: iodata()
-  def encrypt(ref, plaintext, ad \\ []) do
+  @spec encrypt(session(), iodata(), iodata()) :: iodata()
+  def encrypt(session, plaintext, ad \\ []) do
+    channel_pair = Session.fetch!(session, :encrypt, :transport)
     validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
-    {cs, ciphertext} = ChannelPair.write_message(Process.get(ref), ad, plaintext)
-    Process.put(ref, cs)
+    {channel_pair, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
+    Session.store!(session, channel_pair)
     ciphertext
   end
 
@@ -673,11 +680,12 @@ defmodule Decibel do
   See [Failure handling](#module-failure-handling) for the policy an application
   must apply to unauthenticated transport messages.
   """
-  @spec decrypt(reference(), iodata(), iodata()) :: iodata()
-  def decrypt(ref, ciphertext, ad \\ []) do
+  @spec decrypt(session(), iodata(), iodata()) :: iodata()
+  def decrypt(session, ciphertext, ad \\ []) do
+    channel_pair = Session.fetch!(session, :decrypt, :transport)
     validate_size!(ciphertext, @max_message_size, "transport message")
-    {cs, plaintext} = ChannelPair.read_message(Process.get(ref), ad, ciphertext)
-    Process.put(ref, cs)
+    {channel_pair, plaintext} = ChannelPair.read_message(channel_pair, ad, ciphertext)
+    Session.store!(session, channel_pair)
     plaintext
   end
 
@@ -687,11 +695,8 @@ defmodule Decibel do
   These resources are automatically released when the process terminates, but
   this call may be used to eagerly clean them up.
   """
-  @spec close(reference()) :: :ok
-  def close(ref) do
-    Process.delete(ref)
-    :ok
-  end
+  @spec close(session()) :: :ok
+  def close(session), do: Session.close!(session)
 
   @doc """
   Rekey the inbound or outbound channel of the session.
@@ -709,9 +714,11 @@ defmodule Decibel do
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
   """
-  @spec rekey(reference, :in | :out) :: :ok
-  def rekey(ref, dir) when is_reference(ref) and dir in [:in, :out] do
-    Process.put(ref, ChannelPair.rekey(Process.get(ref), dir))
+  @spec rekey(session(), :in | :out) :: :ok
+  def rekey(session, dir) do
+    channel_pair = Session.fetch!(session, :rekey, :transport)
+    validate_direction!(dir)
+    Session.store!(session, ChannelPair.rekey(channel_pair, dir))
     :ok
   end
 
@@ -731,9 +738,11 @@ defmodule Decibel do
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
   """
-  @spec get_nonce(reference(), :in | :out) :: Cipher.nonce()
-  def get_nonce(ref, dir) when is_reference(ref) and dir in [:in, :out] do
-    ChannelPair.get_n(Process.get(ref), dir)
+  @spec get_nonce(session(), :in | :out) :: Cipher.nonce()
+  def get_nonce(session, dir) do
+    channel_pair = Session.fetch!(session, :get_nonce, :transport)
+    validate_direction!(dir)
+    ChannelPair.get_n(channel_pair, dir)
   end
 
   @doc """
@@ -763,9 +772,11 @@ defmodule Decibel do
   [Nonces, replay protection, and rekeying](#module-nonces-replay-protection-and-rekeying)
   before using this low-level operation.
   """
-  @spec set_nonce(reference(), :in | :out, Cipher.usable_nonce()) :: :ok
-  def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] do
-    Process.put(ref, ChannelPair.set_n(Process.get(ref), dir, n))
+  @spec set_nonce(session(), :in | :out, Cipher.usable_nonce()) :: :ok
+  def set_nonce(session, dir, n) do
+    channel_pair = Session.fetch!(session, :set_nonce, :transport)
+    validate_direction!(dir)
+    Session.store!(session, ChannelPair.set_n(channel_pair, dir, n))
     :ok
   end
 
@@ -776,9 +787,17 @@ defmodule Decibel do
   according to
   [Authentication and key handling](#module-authentication-and-key-handling).
   """
-  @spec get_remote_key(reference) :: nil | binary()
-  def get_remote_key(ref) when is_reference(ref) do
-    Map.get(Process.get(ref), :rs)
+  @spec get_remote_key(session()) :: nil | binary()
+  def get_remote_key(session) do
+    session
+    |> Session.fetch!(:get_remote_key, :any)
+    |> Map.get(:rs)
+  end
+
+  defp validate_direction!(direction) when direction in [:in, :out], do: :ok
+
+  defp validate_direction!(direction) do
+    raise ArgumentError, "direction must be :in or :out, got: #{inspect(direction)}"
   end
 
   defp validate_size!(data, maximum, description) do

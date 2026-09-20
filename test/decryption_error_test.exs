@@ -147,8 +147,6 @@ defmodule Decibel.DecryptionErrorTest do
 
     assert "" == Decibel.handshake_decrypt(rsp, invalid_key)
 
-    original_state = Process.get(rsp)
-
     error =
       assert_raise DecryptionError, "Decryption failed", fn ->
         Decibel.handshake_encrypt(rsp)
@@ -156,7 +154,14 @@ defmodule Decibel.DecryptionErrorTest do
 
     assert error.reason == :invalid_public_key
     assert error.remote_keys == [re: invalid_key, rs: nil]
-    assert Process.get(rsp) == original_state
+
+    retry_error =
+      assert_raise DecryptionError, "Decryption failed", fn ->
+        Decibel.handshake_encrypt(rsp)
+      end
+
+    assert retry_error.reason == error.reason
+    assert retry_error.remote_keys == error.remote_keys
 
     Decibel.close(rsp)
   end
@@ -165,7 +170,6 @@ defmodule Decibel.DecryptionErrorTest do
     for suite <- @suites do
       {ini, rsp} = establish_session(suite)
       valid_message = ini |> Decibel.encrypt("valid transport") |> IO.iodata_to_binary()
-      original_state = Process.get(rsp)
 
       for length <- 0..15 do
         error =
@@ -175,7 +179,6 @@ defmodule Decibel.DecryptionErrorTest do
 
         assert error.reason == :truncated
         assert error.remote_keys == []
-        assert Process.get(rsp) == original_state
         assert Decibel.get_nonce(rsp, :in) == 0
       end
 
@@ -186,7 +189,6 @@ defmodule Decibel.DecryptionErrorTest do
 
       assert error.reason == :authentication_failed
       assert error.remote_keys == []
-      assert Process.get(rsp) == original_state
       assert Decibel.get_nonce(rsp, :in) == 0
 
       assert "valid transport" == Decibel.decrypt(rsp, valid_message)
@@ -198,8 +200,6 @@ defmodule Decibel.DecryptionErrorTest do
   end
 
   defp assert_truncated_prefixes(ref, message, remote_keys) do
-    original_state = Process.get(ref)
-
     for length <- 0..(byte_size(message) - 1) do
       error =
         assert_raise DecryptionError, "Decryption failed", fn ->
@@ -208,13 +208,10 @@ defmodule Decibel.DecryptionErrorTest do
 
       assert error.reason == :truncated
       assert error.remote_keys == remote_keys.(length)
-      assert Process.get(ref) == original_state
     end
   end
 
   defp assert_failure(ref, message, reason, remote_keys) do
-    original_state = Process.get(ref)
-
     error =
       assert_raise DecryptionError, "Decryption failed", fn ->
         Decibel.handshake_decrypt(ref, message)
@@ -222,7 +219,6 @@ defmodule Decibel.DecryptionErrorTest do
 
     assert error.reason == reason
     assert error.remote_keys == remote_keys
-    assert Process.get(ref) == original_state
   end
 
   defp establish_session(suite) do
