@@ -125,6 +125,30 @@ defmodule UtilityTest do
     end
   end
 
+  test "required_static_keys derives role requirements from every static token" do
+    assert Utility.required_static_keys(:ini, {[], [ini: [:s]]}) == [:s]
+    assert Utility.required_static_keys(:rsp, {[], [rsp: [:s]]}) == [:s]
+    assert Utility.required_static_keys(:ini, {[], [ini: [:e, :se]]}) == [:s]
+    assert Utility.required_static_keys(:rsp, {[], [rsp: [:e, :es]]}) == [:s]
+    assert Utility.required_static_keys(:ini, {[], [ini: [:e, :ss]]}) == [:s]
+    assert Utility.required_static_keys(:rsp, {[], [ini: [:e, :ss]]}) == [:s]
+
+    refute :s in Utility.required_static_keys(:ini, {[], [rsp: [:e, :es]]})
+    refute :s in Utility.required_static_keys(:rsp, {[], [ini: [:e, :se]]})
+
+    pattern = {[ini: [:s], rsp: [:s]], [ini: [:e]]}
+    assert Utility.required_static_keys(:ini, pattern) == [:s, :rs]
+    assert Utility.required_static_keys(:rsp, pattern) == [:s, :rs]
+  end
+
+  test "required_static_keys uses fallback's fully modified pre-message" do
+    pattern = {[], [ini: [:e, :s], rsp: [:e, :ee, :se]]}
+    fallback = Utility.modify_handshake(pattern, [:fallback])
+
+    assert Utility.required_static_keys(:ini, fallback) == [:s]
+    assert Utility.required_static_keys(:rsp, fallback) == [:rs]
+  end
+
   test "has_preshared_keys requires one 32-byte key per token" do
     assert Utility.has_preshared_keys([], [])
     assert Utility.has_preshared_keys([{:ini, [:psk]}], [<<0::256>>])
