@@ -84,7 +84,7 @@ defmodule Decibel.ConnectionlessTest do
       assert {:ok, "packet 2", window} =
                ConnectionlessReplayWindow.decrypt(recipient, 2, ciphertext2, aad2, window)
 
-      recipient_nonce = Decibel.get_nonce(recipient, :in)
+      recipient_state = Process.get(recipient)
 
       assert {:error, :duplicate, ^window} =
                ConnectionlessReplayWindow.decrypt(recipient, 65, ciphertext65, aad65, window)
@@ -94,7 +94,7 @@ defmodule Decibel.ConnectionlessTest do
       assert {:error, :stale, ^window} =
                ConnectionlessReplayWindow.decrypt(recipient, 1, ciphertext1, aad1, window)
 
-      assert Decibel.get_nonce(recipient, :in) == recipient_nonce
+      assert Process.get(recipient) == recipient_state
 
       {ciphertext3, aad3} = packets[3]
       tampered3 = flip_first_bit(ciphertext3)
@@ -105,7 +105,7 @@ defmodule Decibel.ConnectionlessTest do
       assert {:ok, "packet 3", window} =
                ConnectionlessReplayWindow.decrypt(recipient, 3, ciphertext3, aad3, window)
 
-      recipient_nonce = Decibel.get_nonce(recipient, :in)
+      recipient_state = Process.get(recipient)
 
       for invalid <- [-1, @reserved_nonce, @past_reserved_nonce, :not_a_nonce] do
         error =
@@ -114,7 +114,7 @@ defmodule Decibel.ConnectionlessTest do
           end
 
         assert error.reason == :out_of_range
-        assert Decibel.get_nonce(recipient, :in) == recipient_nonce
+        assert Process.get(recipient) == recipient_state
       end
 
       sender_nonce = Decibel.get_nonce(sender, :out)
