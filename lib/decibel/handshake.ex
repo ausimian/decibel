@@ -6,13 +6,17 @@ defmodule Decibel.Handshake do
 
   @invalid_psks "pre-shared keys must contain exactly one 32-byte key per psk modifier"
 
+  @type initialization_mode :: :safe | :unsafe_test_ephemeral
+  @type keypair :: {Crypto.public_key(), Crypto.private_key()}
+
   typedstruct do
     field(:role, Decibel.role())
     field(:sym, Symmetric.t())
     field(:dh, Crypto.curve())
     field(:s, nil | Crypto.private_key(), default: nil)
     field(:rs, nil | Crypto.public_key(), default: nil)
-    field(:e, nil | Crypto.private_key(), default: nil)
+    field(:e, nil | keypair(), default: nil)
+    field(:unsafe_ephemeral, nil | keypair(), default: nil)
     field(:re, nil | Crypto.public_key(), default: nil)
     field(:psks, [<<_::256>>], default: [])
     field(:pskf, boolean(), default: false)
@@ -22,8 +26,9 @@ defmodule Decibel.Handshake do
     field(:mode, ChannelPair.mode())
   end
 
-  @spec initialize(String.t(), Decibel.role(), map, Keyword.t()) :: __MODULE__.t()
-  def initialize(<<protocol_name::binary>>, role, keys \\ %{}, opts \\ []) when role in [:ini, :rsp] and is_map(keys) do
+  @spec initialize(String.t(), Decibel.role(), map, Keyword.t(), initialization_mode()) :: __MODULE__.t()
+  def initialize(<<protocol_name::binary>>, role, keys \\ %{}, opts \\ [], mode \\ :safe)
+      when role in [:ini, :rsp] and is_map(keys) and mode in [:safe, :unsafe_test_ephemeral] do
     # Parse the protocol name to get the constituent parts
     {{hs_name, mods}, curve, cipher, hash} = Utility.parse_protocol_name(protocol_name)
     # Look up the handshake in the registry and apply any modifications
@@ -34,6 +39,8 @@ defmodule Decibel.Handshake do
       |> fetch_handshake!(hs_name)
       |> Utility.split_handshake()
       |> Utility.modify_handshake(mods)
+
+    {e, unsafe_ephemeral, re} = prepare_ephemeral_keys!(pre, mods, role, curve, keys, mode)
 
     # Check that any keys implied by the pre-message handshake are present
     Utility.has_premessage_keys(role, pre, keys) || raise "Missing pre-message keys"
@@ -52,8 +59,9 @@ defmodule Decibel.Handshake do
       sym: sym,
       dh: curve,
       s: keys[:s],
-      e: keys[:e],
-      re: keys[:re],
+      e: e,
+      unsafe_ephemeral: unsafe_ephemeral,
+      re: re,
       rs: keys[:rs],
       psks: psks,
       pskf: psks != [],
@@ -94,22 +102,21 @@ defmodule Decibel.Handshake do
   end
 
   @spec write_step(:e | :s | :ee | :es | :se | :ss | :psk, __MODULE__.t()) :: __MODULE__.t()
-  defp write_step(:e, %__MODULE__{sym: sym, buf: buf, e: e, dh: dh} = state) do
-    case e do
-      nil ->
-        # Generate ephemeral key and continue. Ephemeral keys _are_ typically
-        # generated, but repeatable testing requires that it be possible to
-        # initialize them with known keys
-        write_step(:e, %__MODULE__{state | e: Crypto.generate_keypair(dh)})
+  defp write_step(:e, %__MODULE__{sym: sym, buf: buf, unsafe_ephemeral: override, dh: dh} = state) do
+    {pub, _priv} = e = override || Crypto.generate_keypair(dh)
 
-      {pub, _priv} ->
-        case %__MODULE__{state | buf: [buf, pub], sym: Symmetric.mix_hash(sym, pub)} do
-          %__MODULE__{pskf: false} = state ->
-            state
+    case %__MODULE__{
+      state
+      | e: e,
+        unsafe_ephemeral: nil,
+        buf: [buf, pub],
+        sym: Symmetric.mix_hash(sym, pub)
+    } do
+      %__MODULE__{pskf: false} = state ->
+        state
 
-          %__MODULE__{sym: sym} = state ->
-            %__MODULE__{state | sym: Symmetric.mix_key(sym, pub)}
-        end
+      %__MODULE__{sym: sym} = state ->
+        %__MODULE__{state | sym: Symmetric.mix_key(sym, pub)}
     end
   end
 
@@ -215,6 +222,76 @@ defmodule Decibel.Handshake do
         %__MODULE__{hs | sym: Symmetric.mix_hash(sym, public_key)}
     end
     |> mix_premessage_public_keys([{msg_role, tokens} | rest])
+  end
+
+  defp prepare_ephemeral_keys!(pre, mods, role, curve, keys, mode) do
+    fallback? = :fallback in mods
+    local_premessage? = fallback? and ephemeral_premessage?(pre, role)
+    remote_premessage? = fallback? and ephemeral_premessage?(pre, opposite(role))
+    key_length = Crypto.dh_len(curve)
+
+    {e, unsafe_ephemeral} =
+      prepare_local_ephemeral!(Map.fetch(keys, :e), mode, local_premessage?, key_length)
+
+    re = prepare_remote_ephemeral!(Map.fetch(keys, :re), remote_premessage?, key_length)
+
+    {e, unsafe_ephemeral, re}
+  end
+
+  defp prepare_local_ephemeral!(:error, _mode, _local_premessage?, _key_length), do: {nil, nil}
+
+  defp prepare_local_ephemeral!({:ok, e}, _mode, true, key_length) do
+    {validate_keypair!(e, key_length, "fallback :e"), nil}
+  end
+
+  defp prepare_local_ephemeral!({:ok, _e}, :safe, false, _key_length) do
+    raise ArgumentError,
+          "caller-supplied :e is only permitted for a local fallback pre-message"
+  end
+
+  defp prepare_local_ephemeral!({:ok, e}, :unsafe_test_ephemeral, false, key_length) do
+    {nil, validate_keypair!(e, key_length, "unsafe :e")}
+  end
+
+  defp prepare_remote_ephemeral!(:error, _remote_premessage?, _key_length), do: nil
+
+  defp prepare_remote_ephemeral!({:ok, re}, true, key_length) do
+    validate_public_key!(re, key_length)
+  end
+
+  defp prepare_remote_ephemeral!({:ok, _re}, false, _key_length) do
+    raise ArgumentError,
+          "caller-supplied :re is only permitted for a remote fallback pre-message"
+  end
+
+  defp ephemeral_premessage?(pre, role) do
+    Enum.any?(pre, fn
+      {^role, tokens} -> :e in tokens
+      {_other_role, _tokens} -> false
+    end)
+  end
+
+  defp opposite(:ini), do: :rsp
+  defp opposite(:rsp), do: :ini
+
+  defp validate_keypair!({public, private} = keypair, key_length, _description)
+       when is_binary(public) and byte_size(public) == key_length and is_binary(private) and
+              byte_size(private) == key_length do
+    keypair
+  end
+
+  defp validate_keypair!(_keypair, key_length, description) do
+    raise ArgumentError,
+          "#{description} must be a keypair containing #{key_length}-byte public and private keys"
+  end
+
+  defp validate_public_key!(public, key_length)
+       when is_binary(public) and byte_size(public) == key_length do
+    public
+  end
+
+  defp validate_public_key!(_public, key_length) do
+    raise ArgumentError, "fallback :re must be a #{key_length}-byte public key"
   end
 
   defp has_key?(%Symmetric{cs: %Cipher{k: k}}), do: k != nil

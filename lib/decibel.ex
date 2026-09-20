@@ -195,9 +195,14 @@ defmodule Decibel do
   protocol, the code is _effectively_ the initiator, and will send the first message on
   this new handshake.
 
-  - The retrievel of the remote ephemeral (`re`) key from the error
-  - The prepopulation of that key in the responder's new handshake (other keys omitted
-    for brevity)
+  The failed initiator's original ephemeral is the fallback pre-message input on both
+  sides. The original initiator supplies its local keypair as `:e`; the responder shown
+  above retrieves the public key from the error and supplies it as `:re`. These keys are
+  prior transcript input and are not transmitted again by the fallback handshake.
+
+  - The retrieval of the remote ephemeral (`re`) key from the error
+  - The prepopulation of that key as `:re` in the responder's new handshake (other keys
+    omitted for brevity)
   - The use of the `[swap: :rsp]` option - this is required to ensure the split cipher
     channels are correctly paired after the interactive fallback handshake. The
     `swap:` option affects only interactive handshakes; it never reverses the
@@ -248,15 +253,24 @@ defmodule Decibel do
 
   The caller should provide a [protocol name](https://noiseprotocol.org/noise.html#protocol-names-and-modifiers)
   and the role the caller will play in the protocol. The caller should provide any keys
-  required by the protocol prior to advancing the handshake. This are typically either
-  static keys or pre-shared keys (PSKs), but ephemeral keys may also be provided. The
-  list of provided keys should be identified as follows:
+  required by the protocol prior to advancing the handshake. These are normally static
+  keys or pre-shared keys (PSKs). Local ephemeral keys for ordinary handshakes are
+  generated internally when their outbound `e` token is processed. The list of provided
+  keys should be identified as follows:
 
   - `:s`: the party's public-private static key pair as a tuple.
   - `:rs`: the peer's public static key as a binary.
+  - `:e`: only for a fallback handshake where the caller sent the failed handshake's
+  original ephemeral; the caller's public-private ephemeral key pair as a tuple.
+  - `:re`: only for a fallback handshake where the peer sent the failed handshake's
+  original ephemeral; the peer's ephemeral public key as a binary.
   - `:psks`: a list of [pre-shared symmetric keys](https://noiseprotocol.org/noise.html#pre-shared-symmetric-keys)
   (as binaries), exactly one 32-byte key for each `pskN` modifier.
   - `:prologue`: any [prologue](https://noiseprotocol.org/noise.html#prologue) data
+
+  Ephemeral keypairs belong to exactly one protocol run. They must never be shared
+  across sessions, processes, or protocol names. The fallback inputs above reuse a key
+  within the same compound-protocol run; they do not make general reuse safe.
 
   Protocol names are limited to 255 bytes and must use the canonical Noise
   syntax. Modifiers are applied from left to right, so `pskN` after `fallback`
@@ -266,14 +280,16 @@ defmodule Decibel do
 
   Raises `ArgumentError` for malformed or unsupported protocol names, invalid
   or non-canonical modifiers, impossible PSK placements, and PSK lists that do
-  not contain exactly one 32-byte key per modifier. Other missing key material
-  also raises an exception.
+  not contain exactly one 32-byte key per modifier. It also raises `ArgumentError`
+  for caller-supplied ephemeral keys outside their role-specific fallback
+  pre-message or with lengths that do not match the selected DH function. Other
+  missing key material also raises an exception.
 
   Returns a reference representing the handshake.
   """
   @spec new(String.t(), role(), map, keyword) :: reference()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
-    hs = Handshake.initialize(protocol_name, role, keys, opts)
+    hs = Handshake.initialize(protocol_name, role, keys, opts, :safe)
     ref = make_ref()
     Process.put(ref, hs)
     ref

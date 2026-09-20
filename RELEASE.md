@@ -1,5 +1,9 @@
 ### Changed
 
+- **Breaking:** Generate a fresh local ephemeral keypair for every ordinary
+  handshake and reject caller-supplied `:e` keypairs outside fallback
+  pre-messages, preventing accidental transport-key and nonce reuse across
+  sessions.
 - **Breaking:** Enforce Noise's 65,535-byte limit for handshake and transport
   messages. Transport plaintexts are now limited to 65,519 bytes to leave room
   for the authentication tag; applications must split and frame larger logical

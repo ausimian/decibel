@@ -5,6 +5,22 @@ defmodule DecibelTest do
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
   @invalid_psks "pre-shared keys must contain exactly one 32-byte key per psk modifier"
+  @ephemeral_suites [
+    %{
+      curve: :x25519,
+      curve_name: "25519",
+      dh_len: 32,
+      cipher: "ChaChaPoly",
+      hash: "BLAKE2s"
+    },
+    %{
+      curve: :x448,
+      curve_name: "448",
+      dh_len: 56,
+      cipher: "AESGCM",
+      hash: "SHA512"
+    }
+  ]
 
   defmodule EmptyRegistry do
     def fetch!(name), do: Map.fetch!(%{}, name)
@@ -32,6 +48,193 @@ defmodule DecibelTest do
 
     Decibel.close(ini)
     Decibel.close(rsp)
+  end
+
+  test "safe construction rejects ephemeral preloading outside fallback" do
+    ephemeral = :crypto.generate_key(:ecdh, :x25519)
+    {initiator_public, _initiator_private} = initiator_static = :crypto.generate_key(:ecdh, :x25519)
+    {responder_public, _responder_private} = responder_static = :crypto.generate_key(:ecdh, :x25519)
+    psk = :crypto.strong_rand_bytes(32)
+
+    cases = [
+      {"N", :ini, %{rs: responder_public}},
+      {"K", :ini, %{s: initiator_static, rs: responder_public}},
+      {"X", :ini, %{s: initiator_static, rs: responder_public}},
+      {"NN", :ini, %{}},
+      {"NN", :rsp, %{}},
+      {"X1X1", :ini, %{s: initiator_static}},
+      {"NNpsk0", :ini, %{psks: [psk]}}
+    ]
+
+    for {pattern, role, keys} <- cases do
+      assert_argument_error_without_session(
+        "caller-supplied :e is only permitted for a local fallback pre-message",
+        fn -> Decibel.new(protocol(pattern), role, Map.put(keys, :e, ephemeral)) end
+      )
+    end
+
+    assert_argument_error_without_session(
+      "caller-supplied :re is only permitted for a remote fallback pre-message",
+      fn ->
+        Decibel.new(protocol("NN"), :ini, %{
+          re: initiator_public,
+          s: responder_static
+        })
+      end
+    )
+  end
+
+  test "fallback reuses the required pre-message ephemeral for both DH functions" do
+    for suite <- @ephemeral_suites do
+      {prior_public, _prior_private} = prior_ephemeral = :crypto.generate_key(:ecdh, suite.curve)
+      initiator_static = :crypto.generate_key(:ecdh, suite.curve)
+      responder_static = :crypto.generate_key(:ecdh, suite.curve)
+      protocol = suite_protocol("XXfallback", suite)
+
+      ini =
+        Decibel.new(
+          protocol,
+          :ini,
+          %{e: prior_ephemeral, s: initiator_static},
+          swap: :rsp
+        )
+
+      rsp =
+        Decibel.new(
+          protocol,
+          :rsp,
+          %{re: prior_public, s: responder_static},
+          swap: :rsp
+        )
+
+      assert Process.get(ini).e == prior_ephemeral
+      assert Process.get(rsp).re == prior_public
+
+      response = rsp |> Decibel.handshake_encrypt() |> IO.iodata_to_binary()
+      refute binary_part(response, 0, suite.dh_len) == prior_public
+      assert "" == Decibel.handshake_decrypt(ini, response)
+
+      final = Decibel.handshake_encrypt(ini)
+      assert "" == Decibel.handshake_decrypt(rsp, final)
+      assert Decibel.is_handshake_complete?(ini)
+      assert Decibel.is_handshake_complete?(rsp)
+
+      ciphertext = Decibel.encrypt(ini, "fallback transport")
+      assert "fallback transport" == Decibel.decrypt(rsp, ciphertext)
+
+      Decibel.close(ini)
+      Decibel.close(rsp)
+    end
+  end
+
+  test "fallback ephemeral inputs enforce role and curve length" do
+    for suite <- @ephemeral_suites do
+      {public, private} = keypair = :crypto.generate_key(:ecdh, suite.curve)
+      protocol = suite_protocol("XXfallback", suite)
+
+      keypair_error =
+        "fallback :e must be a keypair containing #{suite.dh_len}-byte public and private keys"
+
+      public_error = "fallback :re must be a #{suite.dh_len}-byte public key"
+
+      invalid_keypairs = [
+        :not_a_keypair,
+        public,
+        {public, :not_a_private_key},
+        {:not_a_public_key, private},
+        {:crypto.strong_rand_bytes(suite.dh_len - 1), private},
+        {:crypto.strong_rand_bytes(suite.dh_len + 1), private},
+        {public, :crypto.strong_rand_bytes(suite.dh_len - 1)},
+        {public, :crypto.strong_rand_bytes(suite.dh_len + 1)}
+      ]
+
+      for invalid <- invalid_keypairs do
+        assert_argument_error_without_session(keypair_error, fn ->
+          Decibel.new(protocol, :ini, %{e: invalid})
+        end)
+      end
+
+      for invalid <- [
+            :not_a_public_key,
+            :crypto.strong_rand_bytes(suite.dh_len - 1),
+            :crypto.strong_rand_bytes(suite.dh_len + 1)
+          ] do
+        assert_argument_error_without_session(public_error, fn ->
+          Decibel.new(protocol, :rsp, %{re: invalid})
+        end)
+      end
+
+      assert_argument_error_without_session(
+        "caller-supplied :e is only permitted for a local fallback pre-message",
+        fn -> Decibel.new(protocol, :rsp, %{e: keypair, re: public}) end
+      )
+
+      assert_argument_error_without_session(
+        "caller-supplied :re is only permitted for a remote fallback pre-message",
+        fn -> Decibel.new(protocol, :ini, %{e: keypair, re: public}) end
+      )
+    end
+  end
+
+  test "unsafe construction validates and ignores an unused deterministic ephemeral" do
+    {responder_public, _responder_private} = responder_static = :crypto.generate_key(:ecdh, :x25519)
+    unused_ephemeral = :crypto.generate_key(:ecdh, :x25519)
+    protocol = protocol("N")
+
+    ini = Decibel.new(protocol, :ini, %{rs: responder_public})
+    rsp_with_override = Decibel.Unsafe.new(protocol, :rsp, %{s: responder_static, e: unused_ephemeral})
+    rsp_without_override = Decibel.new(protocol, :rsp, %{s: responder_static})
+
+    handshake = Decibel.handshake_encrypt(ini)
+    assert "" == Decibel.handshake_decrypt(rsp_with_override, handshake)
+    assert "" == Decibel.handshake_decrypt(rsp_without_override, handshake)
+
+    ciphertext = Decibel.encrypt(ini, "same derived key")
+    assert "same derived key" == Decibel.decrypt(rsp_with_override, ciphertext)
+    assert "same derived key" == Decibel.decrypt(rsp_without_override, ciphertext)
+
+    for ref <- [ini, rsp_with_override, rsp_without_override], do: Decibel.close(ref)
+
+    assert_argument_error_without_session(
+      "unsafe :e must be a keypair containing 32-byte public and private keys",
+      fn ->
+        Decibel.Unsafe.new(protocol, :rsp, %{
+          s: responder_static,
+          e: {:crypto.strong_rand_bytes(31), :crypto.strong_rand_bytes(32)}
+        })
+      end
+    )
+  end
+
+  test "ordinary sessions produce distinct ephemeral keys and transport ciphertexts" do
+    for suite <- @ephemeral_suites do
+      {responder_public, _responder_private} =
+        responder_static =
+        :crypto.generate_key(:ecdh, suite.curve)
+
+      protocol = suite_protocol("N", suite)
+      ini1 = Decibel.new(protocol, :ini, %{rs: responder_public})
+      ini2 = Decibel.new(protocol, :ini, %{rs: responder_public})
+      rsp1 = Decibel.new(protocol, :rsp, %{s: responder_static})
+      rsp2 = Decibel.new(protocol, :rsp, %{s: responder_static})
+
+      handshake1 = ini1 |> Decibel.handshake_encrypt("same payload") |> IO.iodata_to_binary()
+      handshake2 = ini2 |> Decibel.handshake_encrypt("same payload") |> IO.iodata_to_binary()
+
+      refute binary_part(handshake1, 0, suite.dh_len) ==
+               binary_part(handshake2, 0, suite.dh_len)
+
+      assert "same payload" == Decibel.handshake_decrypt(rsp1, handshake1)
+      assert "same payload" == Decibel.handshake_decrypt(rsp2, handshake2)
+
+      ciphertext1 = Decibel.encrypt(ini1, "same transport plaintext")
+      ciphertext2 = Decibel.encrypt(ini2, "same transport plaintext")
+      refute IO.iodata_to_binary(ciphertext1) == IO.iodata_to_binary(ciphertext2)
+      assert "same transport plaintext" == Decibel.decrypt(rsp1, ciphertext1)
+      assert "same transport plaintext" == Decibel.decrypt(rsp2, ciphertext2)
+
+      for ref <- [ini1, ini2, rsp1, rsp2], do: Decibel.close(ref)
+    end
   end
 
   for {pattern, cipher} <- [{"N", "AESGCM"}, {"K", "ChaChaPoly"}, {"X", "ChaChaPoly"}] do
@@ -259,7 +462,7 @@ defmodule DecibelTest do
     ini_e = :crypto.generate_key(:ecdh, :x25519)
     {ini_rs, _} = :crypto.generate_key(:ecdh, :x25519)
     rsp_s = :crypto.generate_key(:ecdh, :x25519)
-    ini = Decibel.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :ini, %{s: ini_s, e: ini_e, rs: ini_rs})
+    ini = Decibel.Unsafe.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :ini, %{s: ini_s, e: ini_e, rs: ini_rs})
     rsp = Decibel.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :rsp, %{s: rsp_s})
 
     hs1 = Decibel.handshake_encrypt(ini)
@@ -390,6 +593,26 @@ defmodule DecibelTest do
   defp flip_first_bit(iodata), do: flip_first_bit(IO.iodata_to_binary(iodata))
 
   defp protocol(pattern), do: "Noise_#{pattern}_25519_ChaChaPoly_BLAKE2s"
+
+  defp suite_protocol(pattern, suite) do
+    "Noise_#{pattern}_#{suite.curve_name}_#{suite.cipher}_#{suite.hash}"
+  end
+
+  defp assert_argument_error_without_session(message, operation) do
+    sessions = decibel_sessions()
+    assert_raise ArgumentError, message, operation
+    assert decibel_sessions() == sessions
+  end
+
+  defp decibel_sessions do
+    Process.get()
+    |> Enum.filter(fn
+      {_key, %Decibel.Handshake{}} -> true
+      {_key, %Decibel.ChannelPair{}} -> true
+      {_key, _value} -> false
+    end)
+    |> Map.new()
+  end
 
   defp establish_session(cipher) do
     protocol = "Noise_NN_25519_#{cipher}_BLAKE2s"

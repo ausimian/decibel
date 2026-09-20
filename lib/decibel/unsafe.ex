@@ -1,0 +1,20 @@
+# This module deliberately bypasses Decibel's ephemeral-key safety boundary.
+# It exists only for known-answer vectors that require deterministic keypairs;
+# reusing its inputs in real sessions can cause catastrophic key/nonce reuse.
+# Nothing in Decibel's safe public API calls or depends on this module.
+# Some known-answer vectors provide an ephemeral for a role that never sends an
+# `e` token, such as a one-way responder. A valid but unused override is ignored.
+defmodule Decibel.Unsafe do
+  @moduledoc false
+
+  alias Decibel.Handshake
+
+  @doc false
+  @spec new(String.t(), Decibel.role(), map(), keyword()) :: reference()
+  def new(protocol_name, role, keys \\ %{}, opts \\ []) do
+    hs = Handshake.initialize(protocol_name, role, keys, opts, :unsafe_test_ephemeral)
+    ref = make_ref()
+    Process.put(ref, hs)
+    ref
+  end
+end
