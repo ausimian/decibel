@@ -76,14 +76,15 @@ defmodule DecibelTest do
   end
 
   test "Remote keys are available after handshake failure" do
-    ini_s       = :crypto.generate_key(:ecdh, :x25519)
-    ini_e       = :crypto.generate_key(:ecdh, :x25519)
+    ini_s = :crypto.generate_key(:ecdh, :x25519)
+    ini_e = :crypto.generate_key(:ecdh, :x25519)
     {ini_rs, _} = :crypto.generate_key(:ecdh, :x25519)
-    rsp_s       = :crypto.generate_key(:ecdh, :x25519)
+    rsp_s = :crypto.generate_key(:ecdh, :x25519)
     ini = Decibel.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :ini, %{s: ini_s, e: ini_e, rs: ini_rs})
     rsp = Decibel.new("Noise_IK_25519_ChaChaPoly_BLAKE2s", :rsp, %{s: rsp_s})
 
     hs1 = Decibel.handshake_encrypt(ini)
+
     try do
       Decibel.handshake_decrypt(rsp, hs1)
       flunk("Decryption should have failed!")

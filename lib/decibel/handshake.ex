@@ -2,7 +2,7 @@ defmodule Decibel.Handshake do
   @moduledoc false
   use TypedStruct
 
-  alias Decibel.{Crypto, Symmetric, Utility, Cipher, ChannelPair, DecryptionError}
+  alias Decibel.{ChannelPair, Cipher, Crypto, DecryptionError, Symmetric, Utility}
 
   typedstruct do
     field(:role, Decibel.role())
@@ -81,7 +81,7 @@ defmodule Decibel.Handshake do
   end
 
   defp do_steps(%__MODULE__{} = state, tokens, step) do
-    Enum.reduce(tokens, state, fn (token, state) ->
+    Enum.reduce(tokens, state, fn token, state ->
       try do
         step.(token, state)
       rescue
@@ -120,7 +120,7 @@ defmodule Decibel.Handshake do
 
   defp read_step(:e, %__MODULE__{re: nil, sym: sym, dh: dh, buf: buf} = state) do
     key_len = Crypto.dh_len(dh)
-    <<re::binary-size(key_len), rest::binary>> = buf
+    <<re::binary-size(^key_len), rest::binary>> = buf
 
     case %__MODULE__{state | sym: Symmetric.mix_hash(sym, re), re: re, buf: rest} do
       %__MODULE__{pskf: false} = state ->
@@ -133,7 +133,7 @@ defmodule Decibel.Handshake do
 
   defp read_step(:s, %__MODULE__{rs: nil, sym: sym, dh: dh, buf: buf} = state) do
     key_len = Crypto.dh_len(dh) + if has_key?(sym), do: 16, else: 0
-    <<temp::binary-size(key_len), rest::binary>> = buf
+    <<temp::binary-size(^key_len), rest::binary>> = buf
     {sym, rs} = Symmetric.decrypt_and_hash(sym, temp)
     %__MODULE__{state | sym: sym, rs: rs, buf: rest}
   end

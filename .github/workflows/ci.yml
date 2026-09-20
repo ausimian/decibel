@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: ${{ matrix.os }} / Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    runs-on: ${{ matrix.os }}
+    env:
+      MIX_ENV: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
+        elixir: ["1.20", "1.19", "1.18"]
+        otp: ["29", "28", "27"]
+        exclude:
+          - elixir: "1.19"
+            otp: "29"
+          - elixir: "1.18"
+            otp: "29"
+          - elixir: "1.18"
+            otp: "28"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1.24.1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Restore dependencies and build cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.arch }}-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run quality gates
+        run: mix precommit

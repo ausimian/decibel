@@ -44,16 +44,12 @@ defmodule Decibel.Utility do
 
   @spec has_premessage_keys(:ini | :rsp, list(), map()) :: boolean
   def has_premessage_keys(_, [], _), do: true
-  def has_premessage_keys(_, msgs, []), do: msgs == []
+  def has_premessage_keys(_, _msgs, []), do: false
   def has_premessage_keys(role, [{_, []} | msgs], keys), do: has_premessage_keys(role, msgs, keys)
 
   def has_premessage_keys(role, [{sender, [token | tokens]} | msgs], keys)
       when role in [:ini, :rsp] and sender in [:ini, :rsp] do
-    reqd =
-      case token do
-        :e -> if role == sender, do: :e, else: :re
-        :s -> if role == sender, do: :s, else: :rs
-      end
+    reqd = required_premessage_key(token, role == sender)
 
     case Map.pop(keys, reqd) do
       {{_pub, _priv}, new_keys} when reqd in [:e, :s] ->
@@ -90,6 +86,11 @@ defmodule Decibel.Utility do
   defp to_hash("SHA512"), do: :sha512
   defp to_hash("BLAKE2s"), do: :blake2s
   defp to_hash("BLAKE2b"), do: :blake2b
+
+  defp required_premessage_key(:e, true), do: :e
+  defp required_premessage_key(:e, false), do: :re
+  defp required_premessage_key(:s, true), do: :s
+  defp required_premessage_key(:s, false), do: :rs
 
   defp parse_handshake(<<ch, rest::binary>>, hs) when is_handshake_char(ch) do
     parse_handshake(rest, [ch | hs])

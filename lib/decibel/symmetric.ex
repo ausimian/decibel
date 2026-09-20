@@ -2,7 +2,7 @@ defmodule Decibel.Symmetric do
   @moduledoc false
   use TypedStruct
 
-  alias Decibel.{Cipher, Crypto, ChannelPair}
+  alias Decibel.{ChannelPair, Cipher, Crypto}
 
   typedstruct do
     field(:cs, Cipher.t())

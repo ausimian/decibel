@@ -1,5 +1,7 @@
 # Changelog
 
+<!-- %% CHANGELOG_ENTRIES %% -->
+
 ## 0.2.4 - Jan 22, 2025
 
 - Update deps
