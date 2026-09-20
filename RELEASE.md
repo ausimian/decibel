@@ -1,3 +1,12 @@
+### Added
+
+- Document the unaudited, pre-1.0 security posture and supported Noise r34
+  surface, with safe-use guidance for key and PSK handling, peer authentication,
+  protocol negotiation, framing, nonces and replay protection, rekeying, and
+  failure handling.
+- Add a security policy with private vulnerability reporting and a
+  latest-release support policy.
+
 ### Changed
 
 - **Breaking:** Reject attempts to move an outbound transport nonce backwards,
