@@ -72,6 +72,24 @@ defmodule Decibel.SessionKeys do
         send(caller, {reference, :not_ready})
         receive_loop(tables)
 
+      {:DOWN, monitor, :process, heir, _reason}
+      when not is_nil(tables) and monitor == tables.heir_monitor and heir == tables.heir ->
+        Process.send_after(self(), :rebind_heir, 1)
+        receive_loop(%{tables | heir: nil, heir_monitor: nil})
+
+      :rebind_heir when not is_nil(tables) ->
+        case supervised_child(SessionKeyHeir) do
+          nil ->
+            Process.send_after(self(), :rebind_heir, 1)
+            receive_loop(tables)
+
+          heir ->
+            :ets.setopts(tables.public, {:heir, heir, :public})
+            :ets.setopts(tables.secrets, {:heir, heir, :secrets})
+            monitor = Process.monitor(heir)
+            receive_loop(%{tables | heir: heir, heir_monitor: monitor})
+        end
+
       _other ->
         receive_loop(tables)
     end
@@ -101,7 +119,8 @@ defmodule Decibel.SessionKeys do
     secrets = :ets.new(__MODULE__, [:set, :private, {:heir, heir, :secrets}])
     :ets.insert(public, {:public_key, public_key})
     :ets.insert(secrets, {:keypair, keypair})
-    %{public: public, secrets: secrets}
+    monitor = Process.monitor(heir)
+    %{public: public, secrets: secrets, heir: heir, heir_monitor: monitor}
   end
 
   defp reclaim_tables(heir) do
@@ -120,7 +139,8 @@ defmodule Decibel.SessionKeys do
 
         :ets.setopts(public, {:heir, heir, :public})
         :ets.setopts(secrets, {:heir, heir, :secrets})
-        %{public: public, secrets: secrets}
+        monitor = Process.monitor(heir)
+        %{public: public, secrets: secrets, heir: heir, heir_monitor: monitor}
 
       {^reference, :error} ->
         Process.sleep(1)

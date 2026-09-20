@@ -154,12 +154,22 @@ defmodule Decibel.SessionTest do
   test "issued handles survive signing component restarts without serialized validation" do
     session = Decibel.new(@nn_protocol, :ini)
     original_keys = Process.whereis(Decibel.SessionKeys)
+    original_heir = Process.whereis(Decibel.SessionKeyHeir)
 
     on_exit(fn ->
-      if is_nil(Process.whereis(Decibel.SessionKeys)) do
-        Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
+      for child <- [Decibel.SessionKeyHeir, Decibel.SessionKeys],
+          is_nil(Process.whereis(child)) do
+        Supervisor.restart_child(Decibel.Supervisor, child)
       end
     end)
+
+    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeyHeir)
+
+    assert {:ok, restarted_heir} =
+             Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeyHeir)
+
+    refute restarted_heir == original_heir
+    assert :ok == await_session_heir(restarted_heir, 100)
 
     assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeys)
     assert IO.iodata_length(Decibel.handshake_encrypt(session)) == 32
@@ -458,6 +468,17 @@ defmodule Decibel.SessionTest do
       :error ->
         Process.sleep(1)
         await_session_keys(attempts_left - 1)
+    end
+  end
+
+  defp await_session_heir(_heir, 0), do: flunk("session key heir was not rebound")
+
+  defp await_session_heir(heir, attempts_left) do
+    if :ets.info(:decibel_session_public_keys, :heir) == heir do
+      :ok
+    else
+      Process.sleep(1)
+      await_session_heir(heir, attempts_left - 1)
     end
   end
 end
