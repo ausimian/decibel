@@ -4,6 +4,11 @@ defmodule DecibelTest do
 
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
+  @invalid_psks "pre-shared keys must contain exactly one 32-byte key per psk modifier"
+
+  defmodule EmptyRegistry do
+    def fetch!(name), do: Map.fetch!(%{}, name)
+  end
 
   test "Simple NN Test" do
     ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
@@ -114,13 +119,109 @@ defmodule DecibelTest do
     {pub, _priv} = :crypto.generate_key(:ecdh, :x25519)
     psk0 = :crypto.strong_rand_bytes(32)
     psk2 = :crypto.strong_rand_bytes(32)
-    assert_raise RuntimeError, fn -> Decibel.new("Noise_NKpsk0+psk2_25519_ChaChaPoly_BLAKE2s", :ini, %{rs: pub}) end
+    protocol = "Noise_NKpsk0+psk2_25519_ChaChaPoly_BLAKE2s"
 
-    assert_raise RuntimeError, fn ->
-      Decibel.new("Noise_NKpsk0+psk2_25519_ChaChaPoly_BLAKE2s", :ini, %{rs: pub, psks: [psk0]})
+    assert_raise ArgumentError, @invalid_psks, fn -> Decibel.new(protocol, :ini, %{rs: pub}) end
+
+    assert_raise ArgumentError, @invalid_psks, fn ->
+      Decibel.new(protocol, :ini, %{rs: pub, psks: [psk0]})
     end
 
-    Decibel.close(Decibel.new("Noise_NKpsk0+psk2_25519_ChaChaPoly_BLAKE2s", :ini, %{rs: pub, psks: [psk0, psk2]}))
+    for invalid <- [
+          [psk0, psk2, :crypto.strong_rand_bytes(32)],
+          [:crypto.strong_rand_bytes(31), psk2],
+          [:crypto.strong_rand_bytes(33), psk2],
+          [psk0, :invalid],
+          :not_a_list
+        ] do
+      assert_raise ArgumentError, @invalid_psks, fn ->
+        Decibel.new(protocol, :ini, %{rs: pub, psks: invalid})
+      end
+    end
+
+    Decibel.close(Decibel.new(protocol, :ini, %{rs: pub, psks: [psk0, psk2]}))
+
+    assert_raise ArgumentError, @invalid_psks, fn ->
+      Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini, %{psks: [psk0]})
+    end
+  end
+
+  test "PSK indices are bounded by each handshake pattern" do
+    {responder_static, _private} = :crypto.generate_key(:ecdh, :x25519)
+    initiator_static = :crypto.generate_key(:ecdh, :x25519)
+    psk = :crypto.strong_rand_bytes(32)
+
+    for pattern <- ["Npsk0", "Npsk1"] do
+      ref = Decibel.new(protocol(pattern), :ini, %{rs: responder_static, psks: [psk]})
+      Decibel.close(ref)
+    end
+
+    for pattern <- ["NNpsk0", "NNpsk2"] do
+      ref = Decibel.new(protocol(pattern), :ini, %{psks: [psk]})
+      Decibel.close(ref)
+    end
+
+    for pattern <- ["X1Npsk0", "X1Npsk4"] do
+      ref = Decibel.new(protocol(pattern), :ini, %{s: initiator_static, psks: [psk]})
+      Decibel.close(ref)
+    end
+
+    for pattern <- ["XXfallback+psk0", "XXfallback+psk2"] do
+      ref = Decibel.new(protocol(pattern), :rsp, %{re: responder_static, psks: [psk]})
+      Decibel.close(ref)
+    end
+
+    for {pattern, index} <- [{"Npsk2", 2}, {"NNpsk3", 3}, {"X1Npsk5", 5}, {"XXfallback+psk3", 3}] do
+      assert_raise ArgumentError,
+                   "invalid Noise protocol name: psk#{index} does not reference a handshake message",
+                   fn -> Decibel.new(protocol(pattern), :ini, %{psks: [psk]}) end
+    end
+  end
+
+  test "fallback validates the current first message and composes sequentially" do
+    remote_ephemeral = :crypto.strong_rand_bytes(32)
+    remote_static = :crypto.strong_rand_bytes(32)
+    psk = :crypto.strong_rand_bytes(32)
+
+    ref = Decibel.new(protocol("IXfallback"), :rsp, %{re: remote_ephemeral, rs: remote_static})
+    Decibel.close(ref)
+
+    ref = Decibel.new(protocol("XXpsk2+fallback"), :rsp, %{re: remote_ephemeral, psks: [psk]})
+    Decibel.close(ref)
+
+    for pattern <- ["NKfallback", "XXpsk0+fallback", "XXpsk1+fallback"] do
+      assert_raise ArgumentError,
+                   "invalid Noise protocol name: fallback is not applicable to this handshake pattern",
+                   fn -> Decibel.new(protocol(pattern), :ini, %{psks: [psk]}) end
+    end
+  end
+
+  test "PSK tokens consume exactly one key in modifier order" do
+    psks = [:crypto.strong_rand_bytes(32), :crypto.strong_rand_bytes(32)]
+    protocol = protocol("NNpsk0+psk2")
+    ini = Decibel.new(protocol, :ini, %{psks: psks})
+    rsp = Decibel.new(protocol, :rsp, %{psks: psks})
+
+    ini
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(rsp, &1))
+
+    rsp
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(ini, &1))
+
+    assert Decibel.is_handshake_complete?(ini)
+    assert Decibel.is_handshake_complete?(rsp)
+    Decibel.close(ini)
+    Decibel.close(rsp)
+  end
+
+  test "unknown patterns from a custom registry raise a stable error" do
+    assert_raise ArgumentError,
+                 "invalid Noise protocol name: unsupported handshake pattern \"ZZ\"",
+                 fn ->
+                   Decibel.new(protocol("ZZ"), :ini, %{}, registry: EmptyRegistry)
+                 end
   end
 
   test "Detect errors during handshake" do
@@ -287,6 +388,8 @@ defmodule DecibelTest do
 
   defp flip_first_bit(<<first, rest::binary>>), do: <<Bitwise.bxor(first, 1), rest::binary>>
   defp flip_first_bit(iodata), do: flip_first_bit(IO.iodata_to_binary(iodata))
+
+  defp protocol(pattern), do: "Noise_#{pattern}_25519_ChaChaPoly_BLAKE2s"
 
   defp establish_session(cipher) do
     protocol = "Noise_NN_25519_#{cipher}_BLAKE2s"

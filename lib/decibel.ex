@@ -255,10 +255,19 @@ defmodule Decibel do
   - `:s`: the party's public-private static key pair as a tuple.
   - `:rs`: the peer's public static key as a binary.
   - `:psks`: a list of [pre-shared symmetric keys](https://noiseprotocol.org/noise.html#pre-shared-symmetric-keys)
-  (as binaries), one for each psk modifier.
+  (as binaries), exactly one 32-byte key for each `pskN` modifier.
   - `:prologue`: any [prologue](https://noiseprotocol.org/noise.html#prologue) data
 
-  This function will raise an exception if any required keys are missing.
+  Protocol names are limited to 255 bytes and must use the canonical Noise
+  syntax. Modifiers are applied from left to right, so `pskN` after `fallback`
+  indexes the remaining handshake messages. PSK modifiers whose relative order
+  does not affect the resulting pattern must be sorted alphabetically, as
+  required by [Noise section 8.1](https://noiseprotocol.org/noise.html#handshake-pattern-name-section).
+
+  Raises `ArgumentError` for malformed or unsupported protocol names, invalid
+  or non-canonical modifiers, impossible PSK placements, and PSK lists that do
+  not contain exactly one 32-byte key per modifier. Other missing key material
+  also raises an exception.
 
   Returns a reference representing the handshake.
   """

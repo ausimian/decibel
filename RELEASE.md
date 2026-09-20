@@ -7,6 +7,9 @@
 
 ### Fixed
 
+- Reject malformed or non-canonical Noise protocol names, invalid modifier
+  placements, and missing, malformed, or unused pre-shared keys during session
+  creation instead of silently omitting PSK authentication.
 - Return `Decibel.DecryptionError` with a stable reason for truncated,
   unauthenticated, or invalid-key peer messages, preserving processed remote
   keys and leaving session state unchanged.

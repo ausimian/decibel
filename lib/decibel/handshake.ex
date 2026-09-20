@@ -4,6 +4,8 @@ defmodule Decibel.Handshake do
 
   alias Decibel.{ChannelPair, Cipher, Crypto, DecryptionError, Symmetric, Utility}
 
+  @invalid_psks "pre-shared keys must contain exactly one 32-byte key per psk modifier"
+
   typedstruct do
     field(:role, Decibel.role())
     field(:sym, Symmetric.t())
@@ -28,24 +30,22 @@ defmodule Decibel.Handshake do
     reg = Keyword.get(opts, :registry, Decibel.Registry)
 
     {pre, hs} =
-      hs_name
-      |> reg.fetch!()
+      reg
+      |> fetch_handshake!(hs_name)
       |> Utility.split_handshake()
       |> Utility.modify_handshake(mods)
 
     # Check that any keys implied by the pre-message handshake are present
     Utility.has_premessage_keys(role, pre, keys) || raise "Missing pre-message keys"
     # Check that any pre-shared keys are present
-    Utility.has_preshared_keys(hs, Map.get(keys, :psks, [])) || raise "Missing pre-shared keys"
+    psks = Map.get(keys, :psks, [])
+    Utility.has_preshared_keys(hs, psks) || raise ArgumentError, @invalid_psks
 
     # Construct a new symmetric ciper, mixing any prologue and pre-message public keys
     # into the hash
     sym =
       Symmetric.initialize(cipher, hash, protocol_name)
       |> Symmetric.mix_hash(Map.get(keys, :prologue, []))
-
-    # Get any private shared keys
-    psks = keys[:psks] || []
 
     %__MODULE__{
       role: role,
@@ -218,6 +218,15 @@ defmodule Decibel.Handshake do
   end
 
   defp has_key?(%Symmetric{cs: %Cipher{k: k}}), do: k != nil
+
+  defp fetch_handshake!(registry, name) do
+    registry.fetch!(name)
+  rescue
+    _error in KeyError ->
+      reraise ArgumentError,
+              [message: "invalid Noise protocol name: unsupported handshake pattern #{inspect(name)}"],
+              __STACKTRACE__
+  end
 
   defp take_bytes!(bytes, length) when byte_size(bytes) >= length do
     <<field::binary-size(^length), rest::binary>> = bytes
