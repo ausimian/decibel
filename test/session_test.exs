@@ -144,6 +144,30 @@ defmodule Decibel.SessionTest do
            end)
   end
 
+  test "issued handles survive issuer restarts without serializing validation" do
+    session = Decibel.new(@nn_protocol, :ini)
+    original_issuer = Process.whereis(Decibel.SessionIssuer)
+
+    on_exit(fn ->
+      if is_nil(Process.whereis(Decibel.SessionIssuer)) do
+        Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionIssuer)
+      end
+    end)
+
+    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionIssuer)
+    assert IO.iodata_length(Decibel.handshake_encrypt(session)) == 32
+
+    assert {:ok, restarted_issuer} =
+             Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionIssuer)
+
+    refute restarted_issuer == original_issuer
+    assert :ok == Decibel.close(session)
+
+    new_session = Decibel.new(@nn_protocol, :ini)
+    assert IO.iodata_length(Decibel.handshake_encrypt(new_session)) == 32
+    assert :ok == Decibel.close(new_session)
+  end
+
   test "wrong handshake turns and phases raise stable errors without advancing state" do
     initiator = Decibel.new(@nn_protocol, :ini)
     responder = Decibel.new(@nn_protocol, :rsp)

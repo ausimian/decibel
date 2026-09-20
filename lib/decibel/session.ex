@@ -37,7 +37,7 @@ defmodule Decibel.Session do
     owner = self()
     {id, status, proof} = SessionIssuer.issue()
     session = %__MODULE__{owner: owner, id: id, status: status, proof: proof}
-    Process.put(storage_key(session), state)
+    Process.put(storage_key(session), {status, proof, state})
     session
   end
 
@@ -52,8 +52,9 @@ defmodule Decibel.Session do
 
   @doc false
   @spec store!(t(), state()) :: state()
-  def store!(%__MODULE__{owner: owner} = session, state) when owner == self() do
-    Process.put(storage_key(session), state)
+  def store!(%__MODULE__{owner: owner, status: status, proof: proof} = session, state)
+      when owner == self() do
+    Process.put(storage_key(session), {status, proof, state})
     state
   end
 
@@ -69,24 +70,49 @@ defmodule Decibel.Session do
 
   defp validate_handle!(%__MODULE__{owner: owner, id: id, status: status, proof: proof} = session)
        when is_pid(owner) and is_reference(id) and is_reference(status) and is_binary(proof) do
-    if SessionIssuer.issued?(owner, id, status, proof) do
-      if owner == self() do
-        session
-      else
-        raise SessionError, reason: :not_owner
-      end
+    if owner == self() do
+      validate_owned_handle!(session)
     else
-      raise SessionError, reason: :unknown
+      validate_foreign_handle!(session)
     end
   end
 
   defp validate_handle!(_session), do: raise(SessionError, reason: :unknown)
 
+  defp validate_owned_handle!(session) do
+    case Process.get(storage_key(session), @missing) do
+      {status, proof, state}
+      when status == session.status and proof == session.proof and
+             (is_struct(state, Handshake) or is_struct(state, ChannelPair)) ->
+        session
+
+      @missing ->
+        if issued?(session), do: session, else: raise(SessionError, reason: :unknown)
+
+      _other ->
+        raise SessionError, reason: :unknown
+    end
+  end
+
+  defp validate_foreign_handle!(session) do
+    if issued?(session) do
+      raise SessionError, reason: :not_owner
+    else
+      raise SessionError, reason: :unknown
+    end
+  end
+
+  defp issued?(session),
+    do: SessionIssuer.issued?(session.owner, session.id, session.status, session.proof)
+
   defp fetch_state!(session) do
     case Process.get(storage_key(session), @missing) do
-      @missing -> raise_missing_state!(session)
-      %Handshake{} = state -> state
-      %ChannelPair{} = state -> state
+      @missing ->
+        raise_missing_state!(session)
+
+      {status, proof, state}
+      when status == session.status and proof == session.proof ->
+        state
     end
   end
 
