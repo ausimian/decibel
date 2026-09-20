@@ -3,8 +3,6 @@ defmodule Decibel.ChannelPair do
   alias Decibel.Cipher
   use TypedStruct
 
-  alias Decibel.Cipher
-
   typedstruct do
     field(:h, binary())
     field(:in, Cipher.t())
@@ -46,6 +44,8 @@ defmodule Decibel.ChannelPair do
   def get_n(%__MODULE__{out: %Cipher{n: n}}, :out), do: n
 
   @spec set_n(__MODULE__.t(), :in | :out, non_neg_integer()) :: __MODULE__.t()
-  def set_n(%__MODULE__{in: cin} = state, :in, n), do: %__MODULE__{state | in: %Cipher{cin | n: n}}
-  def set_n(%__MODULE__{out: cout} = state, :out, n), do: %__MODULE__{state | out: %Cipher{cout | n: n}}
+  def set_n(%__MODULE__{in: %Cipher{} = cin} = state, :in, n), do: %__MODULE__{state | in: %Cipher{cin | n: n}}
+
+  def set_n(%__MODULE__{out: %Cipher{} = cout} = state, :out, n),
+    do: %__MODULE__{state | out: %Cipher{cout | n: n}}
 end

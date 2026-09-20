@@ -208,12 +208,10 @@ defmodule Decibel do
 
   """
 
-
-
   @typedoc "The role the party plays in the protocol."
   @type role :: :ini | :rsp
 
-  alias Decibel.{Handshake, ChannelPair}
+  alias Decibel.{ChannelPair, Handshake}
 
   @doc """
   Start a new handshake.
@@ -276,6 +274,8 @@ defmodule Decibel do
   Returns `true` if the handshake is complete, `false` otherwise.
   """
   @spec is_handshake_complete?(reference()) :: boolean()
+  # Keep the established public API name for backwards compatibility.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_handshake_complete?(ref) do
     !!get_handshake_hash(ref)
   end

@@ -34,10 +34,12 @@ defmodule VectorTest do
     # In particular, they show how the ephemeral key in the failed IK handshake
     # is reused by the corresponding XXfallback handshake
     initial_protocol = String.replace(name, "XXfallback", "IK")
+
     initial_vec =
       vec
       |> Map.put("protocol_name", initial_protocol)
       |> Map.delete("fallback")
+
     ini = initialize(:ini, initial_vec)
     rsp = initialize(:rsp, initial_vec)
 
@@ -47,6 +49,7 @@ defmodule VectorTest do
     ciphertext = to_binary(msg["ciphertext"])
 
     assert ciphertext == IO.iodata_to_binary(encrypt(ini, payload))
+
     try do
       decrypt(rsp, ciphertext)
       flunk("Handshake should fail")
@@ -66,7 +69,7 @@ defmodule VectorTest do
   defp run_test(vec) when is_map(vec) do
     ini = initialize(:ini, vec)
     rsp = initialize(:rsp, vec)
-    oneway = is_oneway?(vec["protocol_name"])
+    oneway = one_way?(vec["protocol_name"])
 
     # If we're running a fallback handshake, the responder goes first
     {w, r} = if vec["fallback"], do: {rsp, ini}, else: {ini, rsp}
@@ -97,6 +100,7 @@ defmodule VectorTest do
     case Decibel.Utility.parse_protocol_name(vec["protocol_name"]) do
       {{"XK", _}, _, _, _} ->
         assert Decibel.get_remote_key(r2)
+
       _ ->
         :ok
     end
@@ -127,7 +131,14 @@ defmodule VectorTest do
     prefix = if role == :ini, do: "init_", else: "resp_"
 
     keys =
-      for {key, name} <- [e: "ephemeral", s: "static", rs: "remote_static", re: "remote_ephemeral", prologue: "prologue", psks: "psks"],
+      for {key, name} <- [
+            e: "ephemeral",
+            s: "static",
+            rs: "remote_static",
+            re: "remote_ephemeral",
+            prologue: "prologue",
+            psks: "psks"
+          ],
           reduce: %{} do
         keys ->
           case Map.get(vec, prefix <> name) do
@@ -146,7 +157,7 @@ defmodule VectorTest do
     Decibel.new(protocol_name, role, keys, opts)
   end
 
-  defp is_oneway?(protocol_name) do
+  defp one_way?(protocol_name) do
     case Decibel.Utility.parse_protocol_name(protocol_name) do
       {{name, _}, _, _, _} -> name in ["N", "K", "X"]
     end
@@ -179,10 +190,11 @@ defmodule VectorTest do
 
   defp convert_psk(vec, field) do
     case Map.pop(vec, field) do
-      {nil, _} -> vec
+      {nil, _} ->
+        vec
+
       {val, vec2} when is_binary(val) ->
         Map.put(vec2, field <> "s", [val])
     end
   end
-
 end

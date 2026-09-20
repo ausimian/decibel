@@ -2,7 +2,7 @@ defmodule Decibel.Handshake do
   @moduledoc false
   use TypedStruct
 
-  alias Decibel.{Crypto, Symmetric, Utility, Cipher, ChannelPair, DecryptionError}
+  alias Decibel.{ChannelPair, Cipher, Crypto, DecryptionError, Symmetric, Utility}
 
   typedstruct do
     field(:role, Decibel.role())
@@ -81,7 +81,7 @@ defmodule Decibel.Handshake do
   end
 
   defp do_steps(%__MODULE__{} = state, tokens, step) do
-    Enum.reduce(tokens, state, fn (token, state) ->
+    Enum.reduce(tokens, state, fn token, state ->
       try do
         step.(token, state)
       rescue
