@@ -2,9 +2,15 @@ defmodule Decibel.Session do
   @moduledoc """
   An opaque, process-owned Decibel session handle.
 
-  Session handles may only be used by the process that created them. Their
-  fields are private implementation details and must not be inspected or
-  constructed by callers.
+  Session handles may only be used by the process that created them and cannot
+  be transferred. Calls from another process raise `Decibel.SessionError` with
+  `reason: :not_owner`. Session state lives until `Decibel.close/1` is called or
+  the owner process exits, and operations on a closed handle use
+  `reason: :closed`.
+
+  Their fields are private implementation details and must not be inspected or
+  constructed by callers. See `Decibel`'s **Ownership and lifetime** section for
+  the complete concurrency, supervision, phase, and lifecycle contract.
   """
 
   alias Decibel.{ChannelPair, Handshake, SessionError}
