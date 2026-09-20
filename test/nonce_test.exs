@@ -25,10 +25,10 @@ defmodule Decibel.NonceTest do
 
       for ref <- [ini, rsp], direction <- [:in, :out] do
         assert :ok == Decibel.set_nonce(ref, direction, @before_final_nonce)
-        assert @before_final_nonce == Decibel.get_nonce(ref, direction)
+        assert @before_final_nonce == Decibel.nonce(ref, direction)
 
         assert :ok == Decibel.set_nonce(ref, direction, @final_usable_nonce)
-        assert @final_usable_nonce == Decibel.get_nonce(ref, direction)
+        assert @final_usable_nonce == Decibel.nonce(ref, direction)
 
         for invalid <- [-1, @reserved_nonce, @past_reserved_nonce, :not_a_nonce] do
           message =
@@ -43,7 +43,7 @@ defmodule Decibel.NonceTest do
           assert error.reason == :out_of_range
           assert error.nonce == invalid
           assert error.current_nonce == nil
-          assert @final_usable_nonce == Decibel.get_nonce(ref, direction)
+          assert @final_usable_nonce == Decibel.nonce(ref, direction)
         end
       end
 
@@ -57,10 +57,10 @@ defmodule Decibel.NonceTest do
       for ref <- [ini, rsp] do
         assert :ok == Decibel.set_nonce(ref, :out, 5)
         assert :ok == Decibel.set_nonce(ref, :out, 5)
-        assert 5 == Decibel.get_nonce(ref, :out)
+        assert 5 == Decibel.nonce(ref, :out)
 
         assert :ok == Decibel.rekey(ref, :out)
-        assert 5 == Decibel.get_nonce(ref, :out)
+        assert 5 == Decibel.nonce(ref, :out)
 
         error =
           assert_raise Decibel.NonceError,
@@ -70,7 +70,7 @@ defmodule Decibel.NonceTest do
         assert error.reason == :rewind
         assert error.nonce == 4
         assert error.current_nonce == 5
-        assert 5 == Decibel.get_nonce(ref, :out)
+        assert 5 == Decibel.nonce(ref, :out)
 
         for invalid <- [-1, @reserved_nonce, @past_reserved_nonce, :not_a_nonce] do
           error =
@@ -81,12 +81,12 @@ defmodule Decibel.NonceTest do
           assert error.reason == :out_of_range
           assert error.nonce == invalid
           assert error.current_nonce == nil
-          assert 5 == Decibel.get_nonce(ref, :out)
+          assert 5 == Decibel.nonce(ref, :out)
         end
 
         assert :ok == Decibel.set_nonce(ref, :out, @final_usable_nonce)
         _ciphertext = Decibel.encrypt(ref, "final outbound nonce")
-        assert @reserved_nonce == Decibel.get_nonce(ref, :out)
+        assert @reserved_nonce == Decibel.nonce(ref, :out)
 
         error =
           assert_raise Decibel.NonceError,
@@ -96,7 +96,7 @@ defmodule Decibel.NonceTest do
         assert error.reason == :rewind
         assert error.nonce == 0
         assert error.current_nonce == @reserved_nonce
-        assert @reserved_nonce == Decibel.get_nonce(ref, :out)
+        assert @reserved_nonce == Decibel.nonce(ref, :out)
       end
 
       Decibel.close(ini)
@@ -119,7 +119,7 @@ defmodule Decibel.NonceTest do
                    fn -> Decibel.set_nonce(ini, :in, @reserved_nonce) end
 
     assert error.direction == :in
-    assert 0 == Decibel.get_nonce(ini, :out)
+    assert 0 == Decibel.nonce(ini, :out)
 
     Decibel.close(ini)
     Decibel.close(rsp)
@@ -131,18 +131,18 @@ defmodule Decibel.NonceTest do
 
     first_ciphertext = Decibel.encrypt(sender, "before final", "aad-before")
     assert "before final" == Decibel.decrypt(recipient, first_ciphertext, "aad-before")
-    assert @final_usable_nonce == Decibel.get_nonce(sender, :out)
-    assert @final_usable_nonce == Decibel.get_nonce(recipient, :in)
+    assert @final_usable_nonce == Decibel.nonce(sender, :out)
+    assert @final_usable_nonce == Decibel.nonce(recipient, :in)
 
     final_ciphertext = Decibel.encrypt(sender, "final", "aad-final")
     assert "final" == Decibel.decrypt(recipient, final_ciphertext, "aad-final")
-    assert @reserved_nonce == Decibel.get_nonce(sender, :out)
-    assert @reserved_nonce == Decibel.get_nonce(recipient, :in)
+    assert @reserved_nonce == Decibel.nonce(sender, :out)
+    assert @reserved_nonce == Decibel.nonce(recipient, :in)
 
     assert_exhausted(fn -> Decibel.encrypt(sender, "too late") end)
     assert_exhausted(fn -> Decibel.decrypt(recipient, final_ciphertext, "aad-final") end)
-    assert @reserved_nonce == Decibel.get_nonce(sender, :out)
-    assert @reserved_nonce == Decibel.get_nonce(recipient, :in)
+    assert @reserved_nonce == Decibel.nonce(sender, :out)
+    assert @reserved_nonce == Decibel.nonce(recipient, :in)
   end
 
   defp assert_exhausted(operation) do

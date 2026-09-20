@@ -9,6 +9,16 @@
 
 ### Changed
 
+- **Breaking:** Finalize the 1.0 session API with idiomatic
+  `handshake_complete?/1`, `handshake_hash/1`, `nonce/2`, and `remote_key/1`
+  accessors. The 0.2 names remain deprecated for the 1.0 compatibility release
+  and are scheduled for removal in 2.0.
+- Make the raising API contract explicit: data-producing operations return
+  their payloads directly, state-only operations return `:ok`, and rejected
+  operations raise stable exceptions without committing session state.
+- **Breaking:** Remove the unsupported custom `:registry` construction option.
+  The `:swap` option remains available for interactive fallback handshakes and
+  is now fully documented.
 - **Breaking:** Replace bare session references with owner-aware opaque handles.
   Sessions remain local to the process that creates them, cannot be transferred
   or used concurrently from another process, and live until closed or until
@@ -17,7 +27,7 @@
   match, case, or map errors.
 - **Breaking:** Reject attempts to move an outbound transport nonce backwards,
   preventing accidental key/nonce reuse. Callers should read the next outbound
-  nonce with `get_nonce/2`; forward skips and inbound nonce selection remain
+  nonce with `nonce/2`; forward skips and inbound nonce selection remain
   available through `set_nonce/3`.
 - Make connectionless replay protection explicitly application-owned, with a
   bounded replay-window example that records nonces only after successful

@@ -88,8 +88,8 @@ defmodule Decibel.DecryptionErrorTest do
       end)
 
       assert "" == Decibel.handshake_decrypt(rsp, message3)
-      assert Decibel.is_handshake_complete?(ini)
-      assert Decibel.is_handshake_complete?(rsp)
+      assert Decibel.handshake_complete?(ini)
+      assert Decibel.handshake_complete?(rsp)
 
       Decibel.close(ini)
       Decibel.close(rsp)
@@ -132,8 +132,8 @@ defmodule Decibel.DecryptionErrorTest do
 
       assert_failure(rsp, invalid_key, :invalid_public_key, re: invalid_key, rs: nil)
       assert "" == Decibel.handshake_decrypt(rsp, valid_message)
-      assert Decibel.is_handshake_complete?(ini)
-      assert Decibel.is_handshake_complete?(rsp)
+      assert Decibel.handshake_complete?(ini)
+      assert Decibel.handshake_complete?(rsp)
 
       Decibel.close(ini)
       Decibel.close(rsp)
@@ -179,7 +179,7 @@ defmodule Decibel.DecryptionErrorTest do
 
         assert error.reason == :truncated
         assert error.remote_keys == []
-        assert Decibel.get_nonce(rsp, :in) == 0
+        assert Decibel.nonce(rsp, :in) == 0
       end
 
       error =
@@ -189,10 +189,10 @@ defmodule Decibel.DecryptionErrorTest do
 
       assert error.reason == :authentication_failed
       assert error.remote_keys == []
-      assert Decibel.get_nonce(rsp, :in) == 0
+      assert Decibel.nonce(rsp, :in) == 0
 
       assert "valid transport" == Decibel.decrypt(rsp, valid_message)
-      assert Decibel.get_nonce(rsp, :in) == 1
+      assert Decibel.nonce(rsp, :in) == 1
 
       Decibel.close(ini)
       Decibel.close(rsp)

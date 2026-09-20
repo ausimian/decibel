@@ -187,8 +187,8 @@ defmodule Decibel.SessionTest do
       {initiator, responder} = establish_nn(protocol)
       hash_length = if hash in ["SHA256", "BLAKE2s"], do: 32, else: 64
 
-      assert byte_size(Decibel.get_handshake_hash(initiator)) == hash_length
-      assert byte_size(Decibel.get_handshake_hash(responder)) == hash_length
+      assert byte_size(Decibel.handshake_hash(initiator)) == hash_length
+      assert byte_size(Decibel.handshake_hash(responder)) == hash_length
 
       ciphertext = Decibel.encrypt(initiator, protocol)
       assert protocol == Decibel.decrypt(responder, ciphertext)
@@ -204,6 +204,8 @@ defmodule Decibel.SessionTest do
     initiator = Decibel.new(protocol, :ini, %{rs: responder_public})
     responder = Decibel.new(protocol, :rsp, %{s: responder_static})
 
+    assert Decibel.remote_key(initiator) == responder_public
+    assert Decibel.remote_key(responder) == nil
     assert_phase_rejections(initiator, :handshake_write)
     assert_phase_rejections(responder, :handshake_read)
 
@@ -211,7 +213,10 @@ defmodule Decibel.SessionTest do
     assert_phase_rejections(initiator, :transport)
     assert "" == Decibel.handshake_decrypt(responder, message)
     assert_phase_rejections(responder, :transport)
-    assert byte_size(Decibel.get_handshake_hash(initiator)) == 64
+    assert byte_size(Decibel.handshake_hash(initiator)) == 64
+    assert byte_size(Decibel.handshake_hash(responder)) == 64
+    assert Decibel.nonce(initiator, :out) == 0
+    assert Decibel.nonce(responder, :in) == 0
 
     ciphertext = Decibel.encrypt(initiator, "one way")
     assert "one way" == Decibel.decrypt(responder, ciphertext)
@@ -248,7 +253,7 @@ defmodule Decibel.SessionTest do
     refute inspected =~ "#Reference"
 
     assert_session_error(
-      fn -> Decibel.get_handshake_hash(session) end,
+      fn -> Decibel.handshake_hash(session) end,
       :not_owner,
       "Session is owned by another process"
     )
@@ -304,19 +309,26 @@ defmodule Decibel.SessionTest do
       :handshake_write
     )
 
+    assert_wrong_phase(
+      fn -> deprecated_call(:get_nonce, [handshake, :out]) end,
+      :nonce,
+      :transport,
+      :handshake_write
+    )
+
     Decibel.close(handshake)
 
     {initiator, responder} = establish_nn(@nn_protocol)
 
     for call <- [
           fn -> Decibel.rekey(initiator, :sideways) end,
-          fn -> Decibel.get_nonce(initiator, :sideways) end,
+          fn -> Decibel.nonce(initiator, :sideways) end,
           fn -> Decibel.set_nonce(initiator, :sideways, 0) end
         ] do
       assert_raise ArgumentError, "direction must be :in or :out, got: :sideways", call
     end
 
-    assert Decibel.get_nonce(initiator, :out) == 0
+    assert Decibel.nonce(initiator, :out) == 0
     Decibel.close(initiator)
     Decibel.close(responder)
   end
@@ -333,8 +345,8 @@ defmodule Decibel.SessionTest do
     |> Decibel.handshake_encrypt()
     |> then(&Decibel.handshake_decrypt(initiator, &1))
 
-    assert Decibel.is_handshake_complete?(initiator)
-    assert Decibel.is_handshake_complete?(responder)
+    assert Decibel.handshake_complete?(initiator)
+    assert Decibel.handshake_complete?(responder)
 
     {initiator, responder}
   end
@@ -343,15 +355,19 @@ defmodule Decibel.SessionTest do
     [
       handshake_encrypt: fn -> Decibel.handshake_encrypt(session) end,
       handshake_decrypt: fn -> Decibel.handshake_decrypt(session, <<>>) end,
-      is_handshake_complete?: fn -> Decibel.is_handshake_complete?(session) end,
-      get_handshake_hash: fn -> Decibel.get_handshake_hash(session) end,
+      handshake_complete?: fn -> Decibel.handshake_complete?(session) end,
+      handshake_hash: fn -> Decibel.handshake_hash(session) end,
+      deprecated_handshake_complete?: fn -> deprecated_call(:is_handshake_complete?, [session]) end,
+      deprecated_handshake_hash: fn -> deprecated_call(:get_handshake_hash, [session]) end,
       encrypt: fn -> Decibel.encrypt(session, "plaintext") end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
       close: fn -> Decibel.close(session) end,
       rekey: fn -> Decibel.rekey(session, :out) end,
-      get_nonce: fn -> Decibel.get_nonce(session, :out) end,
+      nonce: fn -> Decibel.nonce(session, :out) end,
+      deprecated_nonce: fn -> deprecated_call(:get_nonce, [session, :out]) end,
       set_nonce: fn -> Decibel.set_nonce(session, :out, 0) end,
-      get_remote_key: fn -> Decibel.get_remote_key(session) end
+      remote_key: fn -> Decibel.remote_key(session) end,
+      deprecated_remote_key: fn -> deprecated_call(:get_remote_key, [session]) end
     ]
   end
 
@@ -360,7 +376,7 @@ defmodule Decibel.SessionTest do
       encrypt: fn -> Decibel.encrypt(session, "plaintext") end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
       rekey: fn -> Decibel.rekey(session, :out) end,
-      get_nonce: fn -> Decibel.get_nonce(session, :out) end,
+      nonce: fn -> Decibel.nonce(session, :out) end,
       set_nonce: fn -> Decibel.set_nonce(session, :out, 0) end
     ]
   end
@@ -410,10 +426,14 @@ defmodule Decibel.SessionTest do
   end
 
   defp assert_live_accessors(session, complete?) do
-    assert Decibel.is_handshake_complete?(session) == complete?
-    assert is_binary(Decibel.get_handshake_hash(session)) == complete?
-    assert Decibel.get_remote_key(session) == nil
+    assert Decibel.handshake_complete?(session) == complete?
+    assert is_binary(Decibel.handshake_hash(session)) == complete?
+    assert Decibel.remote_key(session) == nil
   end
+
+  # Dynamic invocation verifies deprecated forwarders without compiler warnings.
+  # credo:disable-for-next-line Credo.Check.Refactor.Apply
+  defp deprecated_call(name, arguments), do: apply(Decibel, name, arguments)
 
   defp assert_wrong_phase(call, operation, expected_phase, actual_phase) do
     message =

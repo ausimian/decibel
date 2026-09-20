@@ -86,11 +86,11 @@ defmodule VectorTest do
         if oneway, do: {writer, reader}, else: {reader, writer}
       end)
 
-    if Enum.all?([r1, r2], &Decibel.is_handshake_complete?/1) do
+    if Enum.all?([r1, r2], &Decibel.handshake_complete?/1) do
       if hh_hex = vec["handshake_hash"] do
         hh = to_binary(hh_hex)
-        assert hh == Decibel.get_handshake_hash(r1)
-        assert hh == Decibel.get_handshake_hash(r2)
+        assert hh == Decibel.handshake_hash(r1)
+        assert hh == Decibel.handshake_hash(r2)
 
         Decibel.rekey(r1, :out)
         Decibel.rekey(r2, :in)
@@ -101,7 +101,7 @@ defmodule VectorTest do
 
     case Decibel.Utility.parse_protocol_name(vec["protocol_name"]) do
       {{"XK", _}, _, _, _} ->
-        assert Decibel.get_remote_key(r2)
+        assert Decibel.remote_key(r2)
 
       _ ->
         :ok
@@ -112,7 +112,7 @@ defmodule VectorTest do
   end
 
   defp encrypt(ref, plaintext) do
-    if Decibel.is_handshake_complete?(ref) do
+    if Decibel.handshake_complete?(ref) do
       Decibel.encrypt(ref, plaintext)
     else
       Decibel.handshake_encrypt(ref, plaintext)
@@ -120,7 +120,7 @@ defmodule VectorTest do
   end
 
   defp decrypt(ref, plaintext) do
-    if Decibel.is_handshake_complete?(ref) do
+    if Decibel.handshake_complete?(ref) do
       Decibel.decrypt(ref, plaintext)
     else
       Decibel.handshake_decrypt(ref, plaintext)

@@ -31,11 +31,9 @@ defmodule Decibel.Handshake do
       when role in [:ini, :rsp] and is_map(keys) and mode in [:safe, :unsafe_test_ephemeral] do
     # Parse the protocol name to get the constituent parts
     {{hs_name, mods}, curve, cipher, hash} = Utility.parse_protocol_name(protocol_name)
-    # Look up the handshake in the registry and apply any modifications
-    registry = registry_option!(opts)
-
+    # Look up the handshake in the built-in registry and apply any modifications
     {pre, hs} =
-      registry
+      Decibel.Registry
       |> fetch_handshake!(hs_name)
       |> Utility.split_handshake()
       |> Utility.modify_handshake(mods)
@@ -363,48 +361,22 @@ defmodule Decibel.Handshake do
     raise ArgumentError, "#{description} must be a #{key_length}-byte public key"
   end
 
-  defp registry_option!(opts) do
+  defp validate_options!(opts) do
     Keyword.keyword?(opts) || raise ArgumentError, "options must be a keyword list"
 
-    case Keyword.get_values(opts, :registry) do
-      [] ->
-        Decibel.Registry
-
-      [registry] ->
-        validate_registry!(registry)
-
-      _registries ->
-        raise ArgumentError, "construction option :registry may only be specified once"
-    end
-  end
-
-  defp validate_options!(opts) do
-    case Enum.find(Keyword.keys(opts), &(&1 not in [:registry, :swap])) do
+    case Enum.find(Keyword.keys(opts), &(&1 != :swap)) do
       nil -> :ok
       key -> raise ArgumentError, "unsupported construction option: #{inspect(key)}"
     end
 
-    case Enum.find([:registry, :swap], &(length(Keyword.get_values(opts, &1)) > 1)) do
-      nil -> :ok
-      key -> raise ArgumentError, "construction option #{inspect(key)} may only be specified once"
+    if length(Keyword.get_values(opts, :swap)) > 1 do
+      raise ArgumentError, "construction option :swap may only be specified once"
     end
 
     case Keyword.get(opts, :swap, :ini) do
       swap when swap in [:ini, :rsp] -> swap
       _swap -> raise ArgumentError, "construction option :swap must be :ini or :rsp"
     end
-  end
-
-  defp validate_registry!(registry) when is_atom(registry) do
-    if Code.ensure_loaded?(registry) and function_exported?(registry, :fetch!, 1) do
-      registry
-    else
-      raise ArgumentError, "construction option :registry must be a module exporting fetch!/1"
-    end
-  end
-
-  defp validate_registry!(_registry) do
-    raise ArgumentError, "construction option :registry must be a module exporting fetch!/1"
   end
 
   defp validate_prologue!(prologue) do

@@ -36,10 +36,6 @@ defmodule Decibel do
   - Cipher: `ChaChaPoly` (ChaCha20-Poly1305) and `AESGCM` (AES-256-GCM).
   - Hash: `SHA256`, `SHA512`, `BLAKE2s`, and `BLAKE2b`.
 
-  Custom patterns supplied through the `:registry` option are outside this
-  supported surface and are not covered by the built-in pattern claims or
-  vector suite.
-
   The test suite exercises checked-in known-answer vectors sourced from
   [Cacophony](https://github.com/haskell-cryptography/cacophony),
   [Snow](https://github.com/mcginty/snow), and
@@ -90,7 +86,7 @@ defmodule Decibel do
   remote static key is acceptable, for example through a certificate,
   configured allow list, pinning, or key continuity. See the specification's
   [authentication guidance](https://noiseprotocol.org/noise.html#security-considerations)
-  and authenticate the value available through `get_remote_key/1`.
+  and authenticate the value available through `remote_key/1`.
 
   The specification's
   [key-reuse rules](https://noiseprotocol.org/noise.html#security-considerations)
@@ -164,6 +160,21 @@ defmodule Decibel do
   `Decibel.NonceError`, and operations on a discarded one-way direction raise
   `Decibel.TransportDirectionError`. Invalid session ownership, lifetime, and
   phase transitions raise `Decibel.SessionError` with a stable `:reason`.
+
+  ## API conventions
+
+  Decibel has a direct, raising API. Operations that produce data return it
+  directly: a session handle, ciphertext or plaintext, a boolean, a handshake
+  hash, a nonce, or a remote key. Operations whose only result is a state change
+  return `:ok`: `close/1`, `rekey/2`, and `set_nonce/3`.
+
+  There are no bang and non-bang variants. Invalid construction and arguments
+  raise `ArgumentError`; peer-message failures raise
+  `Decibel.DecryptionError`; nonce and one-way direction failures raise
+  `Decibel.NonceError` and `Decibel.TransportDirectionError`; and ownership,
+  lifetime, or phase failures raise `Decibel.SessionError`. Applications should
+  rescue these stable exceptions only at boundaries where they have an explicit
+  recovery or failure policy. Rejected operations do not commit session state.
 
   ## Overview
   Decibel encrypts and decrypts messages according to the Noise Protocol,
@@ -290,7 +301,7 @@ defmodule Decibel do
   This sequence continues until the handshake is complete. If the selected protocol
   is known at compile time, the parties can just assume its completion in the
   absence of an error (as in the example [above](#module-example)). Alternatively,
-  each party can call `is_handshake_complete?/1` after each handshake
+  each party can call `handshake_complete?/1` after each handshake
   encryption/decryption.
 
   Once the handshake is complete, a secure channel is established with the
@@ -298,7 +309,7 @@ defmodule Decibel do
   the selected protocol.
 
   Additionally, once the handshake is complete, a unique 'session-hash' is available
-  via `get_handshake_hash/1` - see the [channel-binding](https://noiseprotocol.org/noise.html#channel-binding)
+  via `handshake_hash/1` - see the [channel-binding](https://noiseprotocol.org/noise.html#channel-binding)
   section of the specification for more details.
 
   ### Session
@@ -427,7 +438,7 @@ defmodule Decibel do
   the ciphertext:
 
   ```elixir
-  nonce = Decibel.get_nonce(sender, :out)
+  nonce = Decibel.nonce(sender, :out)
   ciphertext = Decibel.encrypt(sender, plaintext, aad)
   send(peer, {nonce, ciphertext})
   ```
@@ -508,6 +519,28 @@ defmodule Decibel do
   counters or replay windows when they rekey. Once a receive key is replaced,
   delayed packets encrypted under the old key can no longer be decrypted.
 
+  ## Migrating from 0.2.x
+
+  Decibel 1.0 uses idiomatic accessor names:
+
+  - `is_handshake_complete?/1` becomes `handshake_complete?/1`.
+  - `get_handshake_hash/1` becomes `handshake_hash/1`.
+  - `get_nonce/2` becomes `nonce/2`.
+  - `get_remote_key/1` becomes `remote_key/1`.
+
+  The 0.2 names remain deprecated aliases for the 1.0 compatibility release
+  and are scheduled for removal in Decibel 2.0.
+
+  Sessions are now opaque `Decibel.Session` handles owned by the process that
+  creates them. They cannot be transferred between processes. Operations
+  return data or `:ok` directly and raise the stable exceptions described in
+  [API conventions](#module-api-conventions) on failure.
+
+  `:swap` is the only public construction option. Both peers must use the same
+  value; Noise Pipes fallback uses `swap: :rsp`. The former custom `:registry`
+  option is no longer supported because custom handshake patterns are outside
+  Decibel's supported and vector-tested protocol surface.
+
   """
 
   @typedoc "The role the party plays in the protocol."
@@ -515,6 +548,15 @@ defmodule Decibel do
 
   @typedoc "A public-private Diffie-Hellman keypair."
   @type keypair :: {binary(), binary()}
+
+  @typedoc "A Noise handshake hash, sized according to the selected hash function."
+  @type handshake_hash :: <<_::256>> | <<_::512>>
+
+  @typedoc "A cipher nonce, including Noise's reserved exhausted value."
+  @type nonce :: 0..18_446_744_073_709_551_615
+
+  @typedoc "A nonce value that may be selected for an active cipher."
+  @type usable_nonce :: 0..18_446_744_073_709_551_614
 
   @typedoc "Key material and prologue data used to initialize a handshake."
   @type key_material :: %{
@@ -526,13 +568,13 @@ defmodule Decibel do
           optional(:prologue) => iodata()
         }
 
-  @typedoc "An option used to initialize a handshake."
-  @type option :: {:swap, role()} | {:registry, module()}
+  @typedoc "The role whose outbound channel uses the first split key."
+  @type option :: {:swap, role()}
 
   @typedoc "An opaque, process-owned Noise session handle."
   @type session :: Decibel.Session.t()
 
-  alias Decibel.{ChannelPair, Cipher, Handshake, Session}
+  alias Decibel.{ChannelPair, Handshake, Session}
 
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
@@ -568,9 +610,13 @@ defmodule Decibel do
   Public and private DH values must each have the exact length required by the
   selected DH function: 32 bytes for `25519` or 56 bytes for `448`.
 
-  The supported options are `:swap`, whose value must be `:ini` or `:rsp`, and
-  `:registry`, whose value must be a module exporting `fetch!/1`. Each option may
-  appear at most once.
+  The only supported option is `:swap`, whose value must be `:ini` or `:rsp` and
+  defaults to `:ini`. For interactive handshakes, the named role uses the first
+  key returned by Noise `Split()` as its outbound key, and the other role uses
+  that key as its inbound key. Both peers must use the same value. Noise Pipes
+  fallback uses `swap: :rsp` because the responder sends the first fallback
+  message. This option never reverses the fixed direction of a one-way
+  handshake.
 
   Ephemeral keypairs belong to exactly one protocol run. They must never be shared
   across sessions, processes, or protocol names. The fallback inputs above reuse a key
@@ -596,6 +642,7 @@ defmodule Decibel do
   """
   @spec new(String.t(), role(), key_material(), [option()]) :: session()
   def new(protocol_name, role, keys \\ %{}, opts \\ []) do
+    validate_new_arguments!(protocol_name, role, keys)
     hs = Handshake.initialize(protocol_name, role, keys, opts, :safe)
     Session.create(hs)
   end
@@ -669,31 +716,49 @@ defmodule Decibel do
   This accessor is valid during either handshake turn and transport. Invalid
   ownership or a closed/unknown handle raises `Decibel.SessionError`.
   """
-  @spec is_handshake_complete?(session()) :: boolean()
-  # Keep the established public API name for backwards compatibility.
-  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
-  def is_handshake_complete?(session) do
-    case Session.fetch!(session, :is_handshake_complete, :any) do
+  @spec handshake_complete?(session()) :: boolean()
+  def handshake_complete?(session) do
+    case Session.fetch!(session, :handshake_complete?, :any) do
       %Handshake{} -> false
       %ChannelPair{} -> true
     end
   end
 
   @doc """
-  Returns a 32-byte handshake hash, unique to the established session.
+  Deprecated alias for `handshake_complete?/1`.
 
-  Returns `nil` if the handshake is not yet completed.
+  Scheduled for removal in Decibel 2.0.
+  """
+  @deprecated "Use handshake_complete?/1 instead"
+  @spec is_handshake_complete?(session()) :: boolean()
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_handshake_complete?(session), do: handshake_complete?(session)
+
+  @doc """
+  Returns the handshake hash unique to the established session.
+
+  The hash is 32 bytes for `SHA256` and `BLAKE2s`, or 64 bytes for `SHA512`
+  and `BLAKE2b`. Returns `nil` if the handshake is not yet completed.
 
   This accessor is valid during either handshake turn and transport. Invalid
   ownership or a closed/unknown handle raises `Decibel.SessionError`.
   """
-  @spec get_handshake_hash(session()) :: binary() | nil
-  def get_handshake_hash(session) do
-    case Session.fetch!(session, :get_handshake_hash, :any) do
+  @spec handshake_hash(session()) :: handshake_hash() | nil
+  def handshake_hash(session) do
+    case Session.fetch!(session, :handshake_hash, :any) do
       %Handshake{} -> nil
       %ChannelPair{} = cp -> ChannelPair.get_hash(cp)
     end
   end
+
+  @doc """
+  Deprecated alias for `handshake_hash/1`.
+
+  Scheduled for removal in Decibel 2.0.
+  """
+  @deprecated "Use handshake_hash/1 instead"
+  @spec get_handshake_hash(session()) :: handshake_hash() | nil
+  def get_handshake_hash(session), do: handshake_hash(session)
 
   @doc """
   Encrypts a message over an established session, using an optionally
@@ -758,6 +823,8 @@ defmodule Decibel do
   @doc """
   Release the resources associated with the session.
 
+  Returns `:ok` after discarding the session state.
+
   This discards handshake or transport state immediately, including pending key
   material. The state is also released automatically when the owner process
   terminates. The handle remains closed and cannot be reused.
@@ -770,6 +837,8 @@ defmodule Decibel do
 
   @doc """
   Rekey the inbound or outbound channel of the session.
+
+  Returns `:ok` after replacing the selected key.
 
   Noise rekeying changes the selected channel's key but does not reset its
   nonce. Applications must coordinate rekeying with the peer and continue the
@@ -815,22 +884,33 @@ defmodule Decibel do
   Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
   or use during the handshake raises `Decibel.SessionError`.
   """
-  @spec get_nonce(session(), :in | :out) :: Cipher.nonce()
-  def get_nonce(session, dir) do
-    channel_pair = Session.fetch!(session, :get_nonce, :transport)
+  @spec nonce(session(), :in | :out) :: nonce()
+  def nonce(session, dir) do
+    channel_pair = Session.fetch!(session, :nonce, :transport)
     validate_direction!(dir)
     ChannelPair.get_n(channel_pair, dir)
   end
 
   @doc """
+  Deprecated alias for `nonce/2`.
+
+  Scheduled for removal in Decibel 2.0.
+  """
+  @deprecated "Use nonce/2 instead"
+  @spec get_nonce(session(), :in | :out) :: nonce()
+  def get_nonce(session, dir), do: nonce(session, dir)
+
+  @doc """
   Set the current value of nonce for the specified cipher.
+
+  Returns `:ok` after selecting the nonce.
 
   > #### Danger: low-level nonce control {: .warning}
   >
   > This function does not provide replay protection. Applications selecting
   > inbound nonces must reject every nonce that has already authenticated and
   > must record a nonce only after successful decryption. Applications should
-  > normally read outbound nonces with `get_nonce/2`; moving an outbound nonce
+  > normally read outbound nonces with `nonce/2`; moving an outbound nonce
   > backwards is rejected because reusing a nonce with the same key is a
   > catastrophic AEAD failure.
 
@@ -853,7 +933,7 @@ defmodule Decibel do
   or use during the handshake raises `Decibel.SessionError` before any state
   change.
   """
-  @spec set_nonce(session(), :in | :out, Cipher.usable_nonce()) :: :ok
+  @spec set_nonce(session(), :in | :out, usable_nonce()) :: :ok
   def set_nonce(session, dir, n) do
     channel_pair = Session.fetch!(session, :set_nonce, :transport)
     validate_direction!(dir)
@@ -871,11 +951,26 @@ defmodule Decibel do
   This accessor is valid during either handshake turn and transport. Invalid
   ownership or a closed/unknown handle raises `Decibel.SessionError`.
   """
-  @spec get_remote_key(session()) :: nil | binary()
-  def get_remote_key(session) do
+  @spec remote_key(session()) :: nil | binary()
+  def remote_key(session) do
     session
-    |> Session.fetch!(:get_remote_key, :any)
+    |> Session.fetch!(:remote_key, :any)
     |> Map.get(:rs)
+  end
+
+  @doc """
+  Deprecated alias for `remote_key/1`.
+
+  Scheduled for removal in Decibel 2.0.
+  """
+  @deprecated "Use remote_key/1 instead"
+  @spec get_remote_key(session()) :: binary() | nil
+  def get_remote_key(session), do: remote_key(session)
+
+  defp validate_new_arguments!(protocol_name, role, keys) do
+    is_binary(protocol_name) || raise ArgumentError, "protocol name must be a string"
+    role in [:ini, :rsp] || raise ArgumentError, "role must be :ini or :rsp"
+    is_map(keys) || raise ArgumentError, "key material must be a map"
   end
 
   defp validate_direction!(direction) when direction in [:in, :out], do: :ok

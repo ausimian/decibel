@@ -92,28 +92,17 @@ defmodule DecibelTest do
     {"I1X1fallback", %{ini: [:s], rsp: [:s, :rs]}}
   ]
 
-  defmodule EmptyRegistry do
-    def fetch!(name), do: Map.fetch!(%{}, name)
-  end
-
-  defmodule NNRegistry do
-    def fetch!("NN"), do: [ini: [:e], rsp: [:e, :ee]]
-  end
-
-  defmodule MissingFetchRegistry do
-  end
-
   test "Simple NN Test" do
     ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
     rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
 
     hs1 = Decibel.handshake_encrypt(ini)
     "" = Decibel.handshake_decrypt(rsp, hs1)
-    refute Enum.any?([ini, rsp], &Decibel.is_handshake_complete?/1)
+    refute Enum.any?([ini, rsp], &Decibel.handshake_complete?/1)
 
     hs2 = Decibel.handshake_encrypt(rsp)
     "" = Decibel.handshake_decrypt(ini, hs2)
-    assert Enum.all?([ini, rsp], &Decibel.is_handshake_complete?/1)
+    assert Enum.all?([ini, rsp], &Decibel.handshake_complete?/1)
 
     data = :crypto.strong_rand_bytes(32_768)
     msg1 = Decibel.encrypt(ini, data, "The mess we're in")
@@ -125,6 +114,74 @@ defmodule DecibelTest do
 
     Decibel.close(ini)
     Decibel.close(rsp)
+  end
+
+  test "canonical accessors and deprecated aliases return the same values" do
+    ini = Decibel.new(protocol("NN"), :ini)
+    rsp = Decibel.new(protocol("NN"), :rsp)
+
+    refute Decibel.handshake_complete?(ini)
+    assert Decibel.handshake_hash(ini) == nil
+    assert Decibel.remote_key(ini) == nil
+    refute deprecated_call(:is_handshake_complete?, [ini])
+    assert deprecated_call(:get_handshake_hash, [ini]) == nil
+    assert deprecated_call(:get_remote_key, [ini]) == nil
+
+    ini
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(rsp, &1))
+
+    rsp
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(ini, &1))
+
+    assert Decibel.handshake_complete?(ini)
+    assert byte_size(Decibel.handshake_hash(ini)) == 32
+    assert deprecated_call(:is_handshake_complete?, [ini])
+    assert deprecated_call(:get_handshake_hash, [ini]) == Decibel.handshake_hash(ini)
+    assert deprecated_call(:get_nonce, [ini, :out]) == Decibel.nonce(ini, :out)
+    assert deprecated_call(:get_remote_key, [ini]) == Decibel.remote_key(ini)
+
+    assert :ok == Decibel.close(ini)
+    assert :ok == Decibel.close(rsp)
+  end
+
+  test "deprecated accessor metadata names replacements and documents removal" do
+    {:docs_v1, _, _, _, _, _, docs} = Code.fetch_docs(Decibel)
+
+    metadata =
+      docs
+      |> Enum.filter(&match?({{:function, _, _}, _, _, _, _}, &1))
+      |> Map.new(fn {{:function, name, arity}, _, _, _, metadata} ->
+        {{name, arity}, metadata}
+      end)
+
+    for {old, new} <- [
+          {{:is_handshake_complete?, 1}, "handshake_complete?/1"},
+          {{:get_handshake_hash, 1}, "handshake_hash/1"},
+          {{:get_nonce, 2}, "nonce/2"},
+          {{:get_remote_key, 1}, "remote_key/1"}
+        ] do
+      assert metadata[old][:deprecated] == "Use #{new} instead"
+
+      {{:function, name, arity}, _, _, %{"en" => doc}, _} =
+        Enum.find(docs, fn
+          {{:function, name, arity}, _, _, _, _} -> {name, arity} == old
+          _entry -> false
+        end)
+
+      assert {name, arity} == old
+      assert doc =~ "Scheduled for removal in Decibel 2.0"
+    end
+
+    for current <- [
+          {:handshake_complete?, 1},
+          {:handshake_hash, 1},
+          {:nonce, 2},
+          {:remote_key, 1}
+        ] do
+      refute Map.has_key?(metadata[current], :deprecated)
+    end
   end
 
   test "safe construction rejects ephemeral preloading outside fallback" do
@@ -190,8 +247,8 @@ defmodule DecibelTest do
 
       final = Decibel.handshake_encrypt(ini)
       assert "" == Decibel.handshake_decrypt(rsp, final)
-      assert Decibel.is_handshake_complete?(ini)
-      assert Decibel.is_handshake_complete?(rsp)
+      assert Decibel.handshake_complete?(ini)
+      assert Decibel.handshake_complete?(rsp)
 
       ciphertext = Decibel.encrypt(ini, "fallback transport")
       assert "fallback transport" == Decibel.decrypt(rsp, ciphertext)
@@ -317,8 +374,8 @@ defmodule DecibelTest do
       cipher = unquote(cipher)
       {ini, rsp} = establish_one_way_session(pattern, cipher, swap: :rsp)
 
-      assert 0 == Decibel.get_nonce(ini, :out)
-      assert 0 == Decibel.get_nonce(rsp, :in)
+      assert 0 == Decibel.nonce(ini, :out)
+      assert 0 == Decibel.nonce(rsp, :in)
 
       error =
         assert_raise Decibel.TransportDirectionError,
@@ -326,13 +383,13 @@ defmodule DecibelTest do
                      fn -> Decibel.encrypt(rsp, "must not be allowed") end
 
       assert error.direction == :out
-      assert 0 == Decibel.get_nonce(ini, :out)
-      assert 0 == Decibel.get_nonce(rsp, :in)
+      assert 0 == Decibel.nonce(ini, :out)
+      assert 0 == Decibel.nonce(rsp, :in)
 
       ciphertext = Decibel.encrypt(ini, "forward transport")
       assert "forward transport" == Decibel.decrypt(rsp, ciphertext)
-      assert 1 == Decibel.get_nonce(ini, :out)
-      assert 1 == Decibel.get_nonce(rsp, :in)
+      assert 1 == Decibel.nonce(ini, :out)
+      assert 1 == Decibel.nonce(rsp, :in)
 
       error =
         assert_raise Decibel.TransportDirectionError,
@@ -340,8 +397,8 @@ defmodule DecibelTest do
                      fn -> Decibel.decrypt(ini, ciphertext) end
 
       assert error.direction == :in
-      assert 1 == Decibel.get_nonce(ini, :out)
-      assert 1 == Decibel.get_nonce(rsp, :in)
+      assert 1 == Decibel.nonce(ini, :out)
+      assert 1 == Decibel.nonce(rsp, :in)
 
       Decibel.close(ini)
       Decibel.close(rsp)
@@ -352,7 +409,7 @@ defmodule DecibelTest do
     {ini, rsp} = establish_one_way_session("N", "ChaChaPoly", swap: :rsp)
 
     for operation <- [
-          fn -> Decibel.get_nonce(ini, :in) end,
+          fn -> Decibel.nonce(ini, :in) end,
           fn -> Decibel.set_nonce(ini, :in, 0) end,
           fn -> Decibel.rekey(ini, :in) end
         ] do
@@ -360,19 +417,19 @@ defmodule DecibelTest do
     end
 
     for operation <- [
-          fn -> Decibel.get_nonce(rsp, :out) end,
+          fn -> Decibel.nonce(rsp, :out) end,
           fn -> Decibel.set_nonce(rsp, :out, 0) end,
           fn -> Decibel.rekey(rsp, :out) end
         ] do
       assert_direction_error(:out, operation)
     end
 
-    assert 0 == Decibel.get_nonce(ini, :out)
-    assert 0 == Decibel.get_nonce(rsp, :in)
+    assert 0 == Decibel.nonce(ini, :out)
+    assert 0 == Decibel.nonce(rsp, :in)
     assert :ok == Decibel.set_nonce(ini, :out, 1)
     assert :ok == Decibel.set_nonce(rsp, :in, 1)
-    assert 1 == Decibel.get_nonce(ini, :out)
-    assert 1 == Decibel.get_nonce(rsp, :in)
+    assert 1 == Decibel.nonce(ini, :out)
+    assert 1 == Decibel.nonce(rsp, :in)
     assert :ok == Decibel.rekey(ini, :out)
     assert :ok == Decibel.rekey(rsp, :in)
     assert "after rekey" == Decibel.decrypt(rsp, Decibel.encrypt(ini, "after rekey"))
@@ -546,8 +603,22 @@ defmodule DecibelTest do
     end
   end
 
+  test "constructor normalizes top-level configuration argument errors" do
+    assert_argument_error_without_session("protocol name must be a string", fn ->
+      Decibel.new(:not_a_protocol_name, :ini)
+    end)
+
+    assert_argument_error_without_session("role must be :ini or :rsp", fn ->
+      Decibel.new(protocol("NN"), :sender)
+    end)
+
+    assert_argument_error_without_session("key material must be a map", fn ->
+      Decibel.new(protocol("NN"), :ini, [])
+    end)
+  end
+
   test "construction options validate shape, uniqueness, and values" do
-    for opts <- [[], [swap: :ini], [swap: :rsp], [registry: NNRegistry]] do
+    for opts <- [[], [swap: :ini], [swap: :rsp]] do
       ref = Decibel.new(protocol("NN"), :ini, %{}, opts)
       Decibel.close(ref)
     end
@@ -565,13 +636,6 @@ defmodule DecibelTest do
       fn -> Decibel.new(protocol("NN"), :ini, %{}, swap: :ini, swap: :rsp) end
     )
 
-    assert_argument_error_without_session(
-      "construction option :registry may only be specified once",
-      fn ->
-        Decibel.new(protocol("NN"), :ini, %{}, registry: NNRegistry, registry: Decibel.Registry)
-      end
-    )
-
     for invalid <- [:invalid, nil, "ini"] do
       assert_argument_error_without_session(
         "construction option :swap must be :ini or :rsp",
@@ -579,12 +643,13 @@ defmodule DecibelTest do
       )
     end
 
-    for invalid <- ["Decibel.Registry", DecibelTest.NotLoadedRegistry, MissingFetchRegistry] do
-      assert_argument_error_without_session(
-        "construction option :registry must be a module exporting fetch!/1",
-        fn -> Decibel.new(protocol("NN"), :ini, %{}, registry: invalid) end
-      )
-    end
+    assert_argument_error_without_session("unsupported construction option: :registry", fn ->
+      Decibel.new(protocol("NN"), :ini, %{}, registry: Decibel.Registry)
+    end)
+
+    assert_argument_error_without_session("unsupported construction option: :registry", fn ->
+      Decibel.Unsafe.new(protocol("NN"), :ini, %{}, registry: Decibel.Registry)
+    end)
   end
 
   test "constructor preserves protocol, ephemeral, and PSK error precedence" do
@@ -716,17 +781,17 @@ defmodule DecibelTest do
     |> Decibel.handshake_encrypt()
     |> then(&Decibel.handshake_decrypt(ini, &1))
 
-    assert Decibel.is_handshake_complete?(ini)
-    assert Decibel.is_handshake_complete?(rsp)
+    assert Decibel.handshake_complete?(ini)
+    assert Decibel.handshake_complete?(rsp)
     Decibel.close(ini)
     Decibel.close(rsp)
   end
 
-  test "unknown patterns from a custom registry raise a stable error" do
+  test "unknown patterns from the built-in registry raise a stable error" do
     assert_raise ArgumentError,
                  "invalid Noise protocol name: unsupported handshake pattern \"ZZ\"",
                  fn ->
-                   Decibel.new(protocol("ZZ"), :ini, %{}, registry: EmptyRegistry)
+                   Decibel.new(protocol("ZZ"), :ini)
                  end
   end
 
@@ -793,7 +858,7 @@ defmodule DecibelTest do
     "" = Decibel.handshake_decrypt(ini, hs2)
 
     # Generate 4 outbound messages
-    assert 0 == Decibel.get_nonce(ini, :out)
+    assert 0 == Decibel.nonce(ini, :out)
     pt0 = :crypto.strong_rand_bytes(1024)
     ct0 = Decibel.encrypt(ini, pt0, <<0::unsigned-little-64>>)
     pt1 = :crypto.strong_rand_bytes(1024)
@@ -805,7 +870,7 @@ defmodule DecibelTest do
 
     # This exercises the low-level primitive only. Applications must separately
     # track successfully authenticated nonces and reject replays.
-    assert 0 == Decibel.get_nonce(rsp, :in)
+    assert 0 == Decibel.nonce(rsp, :in)
     :ok = Decibel.set_nonce(rsp, :in, 1)
     assert pt1 == Decibel.decrypt(rsp, ct1, <<1::unsigned-little-64>>)
     :ok = Decibel.set_nonce(rsp, :in, 0)
@@ -829,14 +894,14 @@ defmodule DecibelTest do
 
       assert_raise ArgumentError, fn -> Decibel.encrypt(ini, [plaintext, <<2>>]) end
 
-      assert Decibel.get_nonce(ini, :out) == 1
+      assert Decibel.nonce(ini, :out) == 1
       assert "after rejection" == Decibel.decrypt(rsp, Decibel.encrypt(ini, "after rejection"))
 
       ciphertext = Decibel.encrypt(ini, plaintext)
 
       assert_raise ArgumentError, fn -> Decibel.decrypt(rsp, [ciphertext, <<0>>]) end
 
-      assert Decibel.get_nonce(rsp, :in) == 2
+      assert Decibel.nonce(rsp, :in) == 2
       assert IO.iodata_to_binary(plaintext) == Decibel.decrypt(rsp, ciphertext)
 
       Decibel.close(ini)
@@ -895,6 +960,10 @@ defmodule DecibelTest do
 
   defp flip_first_bit(<<first, rest::binary>>), do: <<Bitwise.bxor(first, 1), rest::binary>>
   defp flip_first_bit(iodata), do: flip_first_bit(IO.iodata_to_binary(iodata))
+
+  # Dynamic invocation verifies deprecated forwarders without compiler warnings.
+  # credo:disable-for-next-line Credo.Check.Refactor.Apply
+  defp deprecated_call(name, arguments), do: apply(Decibel, name, arguments)
 
   defp protocol(pattern), do: "Noise_#{pattern}_25519_ChaChaPoly_BLAKE2s"
 
@@ -981,8 +1050,8 @@ defmodule DecibelTest do
     |> Decibel.handshake_encrypt()
     |> then(&Decibel.handshake_decrypt(rsp, &1))
 
-    assert Decibel.is_handshake_complete?(ini)
-    assert Decibel.is_handshake_complete?(rsp)
+    assert Decibel.handshake_complete?(ini)
+    assert Decibel.handshake_complete?(rsp)
 
     {ini, rsp}
   end
