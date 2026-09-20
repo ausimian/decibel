@@ -50,21 +50,24 @@ defmodule Decibel.ChannelPair do
     %__MODULE__{state | out: Cipher.rekey(cout)}
   end
 
-  @spec get_n(__MODULE__.t(), :in | :out) :: non_neg_integer()
+  @spec get_n(__MODULE__.t(), :in | :out) :: Cipher.nonce()
   def get_n(%__MODULE__{in: nil}, :in), do: raise_direction_error(:in)
   def get_n(%__MODULE__{in: %Cipher{n: n}}, :in), do: n
   def get_n(%__MODULE__{out: nil}, :out), do: raise_direction_error(:out)
   def get_n(%__MODULE__{out: %Cipher{n: n}}, :out), do: n
 
-  @spec set_n(__MODULE__.t(), :in | :out, non_neg_integer()) :: __MODULE__.t()
+  @spec set_n(__MODULE__.t(), :in | :out, Cipher.usable_nonce()) :: __MODULE__.t()
   def set_n(%__MODULE__{in: nil}, :in, _n), do: raise_direction_error(:in)
 
-  def set_n(%__MODULE__{in: %Cipher{} = cin} = state, :in, n), do: %__MODULE__{state | in: %Cipher{cin | n: n}}
+  def set_n(%__MODULE__{in: %Cipher{} = cin} = state, :in, n) do
+    %__MODULE__{state | in: Cipher.set_nonce(cin, n)}
+  end
 
   def set_n(%__MODULE__{out: nil}, :out, _n), do: raise_direction_error(:out)
 
-  def set_n(%__MODULE__{out: %Cipher{} = cout} = state, :out, n),
-    do: %__MODULE__{state | out: %Cipher{cout | n: n}}
+  def set_n(%__MODULE__{out: %Cipher{} = cout} = state, :out, n) do
+    %__MODULE__{state | out: Cipher.set_nonce(cout, n)}
+  end
 
   defp raise_direction_error(direction), do: raise(TransportDirectionError, direction: direction)
 end

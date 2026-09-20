@@ -7,6 +7,9 @@
 
 ### Fixed
 
+- Allow Noise's final usable transport nonce (`2^64 - 2`) once, then raise
+  `Decibel.NonceError` on exhaustion; `set_nonce/3` now rejects reserved and
+  out-of-range nonce values without changing session state.
 - Prevent responders from encrypting and initiators from decrypting transport
   messages after `N`, `K`, and `X` one-way handshakes. Operations targeting the
   discarded transport direction now raise `Decibel.TransportDirectionError`.

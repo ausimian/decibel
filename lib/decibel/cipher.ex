@@ -1,14 +1,18 @@
 defmodule Decibel.Cipher do
   @moduledoc false
   use TypedStruct
-  alias Decibel.Crypto
+  alias Decibel.{Crypto, NonceError}
 
-  @rekey 2 ** 64 - 1
+  @reserved_nonce 2 ** 64 - 1
+  @final_usable_nonce @reserved_nonce - 1
+
+  @type nonce :: 0..18_446_744_073_709_551_615
+  @type usable_nonce :: 0..18_446_744_073_709_551_614
 
   typedstruct do
     field(:type, Crypto.cipher())
     field(:k, nil | binary(), default: nil)
-    field(:n, non_neg_integer(), default: 0)
+    field(:n, nonce(), default: 0)
   end
 
   @doc """
@@ -38,9 +42,14 @@ defmodule Decibel.Cipher do
   @doc """
   Set the nonce value of the cipher.
   """
-  @spec set_nonce(__MODULE__.t(), non_neg_integer()) :: __MODULE__.t()
-  def set_nonce(%__MODULE__{} = cipher, n) when is_integer(n) and n >= 0 and n < @rekey do
+  @spec set_nonce(__MODULE__.t(), usable_nonce()) :: __MODULE__.t()
+  def set_nonce(%__MODULE__{} = cipher, n)
+      when is_integer(n) and n >= 0 and n <= @final_usable_nonce do
     %__MODULE__{cipher | n: n}
+  end
+
+  def set_nonce(%__MODULE__{}, n) do
+    raise NonceError, reason: :out_of_range, nonce: n
   end
 
   @doc """
@@ -57,9 +66,11 @@ defmodule Decibel.Cipher do
   def encrypt_with_aad(%__MODULE__{k: nil} = cipher, _, plaintext), do: {cipher, plaintext}
 
   def encrypt_with_aad(%__MODULE__{type: type, k: k, n: n} = cipher, aad, plaintext)
-      when is_integer(n) and n >= 0 and n < @rekey - 1 do
+      when is_integer(n) and n >= 0 and n <= @final_usable_nonce do
     {%__MODULE__{cipher | n: n + 1}, Crypto.encrypt(type, k, n, aad, plaintext)}
   end
+
+  def encrypt_with_aad(%__MODULE__{n: n}, _, _), do: raise_nonce_error(n)
 
   @doc """
   Decrypts the specified ciphertext.
@@ -73,7 +84,7 @@ defmodule Decibel.Cipher do
   def decrypt_with_aad(%__MODULE__{k: nil} = cipher, _, ciphertext), do: {cipher, ciphertext}
 
   def decrypt_with_aad(%__MODULE__{type: type, k: k, n: n} = cipher, aad, ciphertext)
-      when is_integer(n) and n >= 0 and n < @rekey - 1 do
+      when is_integer(n) and n >= 0 and n <= @final_usable_nonce do
     case Crypto.decrypt(type, k, n, aad, ciphertext) do
       plaintext when is_binary(plaintext) ->
         {%__MODULE__{cipher | n: n + 1}, plaintext}
@@ -81,5 +92,15 @@ defmodule Decibel.Cipher do
       :error ->
         raise Decibel.DecryptionError
     end
+  end
+
+  def decrypt_with_aad(%__MODULE__{n: n}, _, _), do: raise_nonce_error(n)
+
+  defp raise_nonce_error(@reserved_nonce) do
+    raise NonceError, reason: :exhausted, nonce: @reserved_nonce
+  end
+
+  defp raise_nonce_error(n) do
+    raise NonceError, reason: :out_of_range, nonce: n
   end
 end
