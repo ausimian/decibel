@@ -5,8 +5,9 @@ defmodule Decibel.Session do
   Session handles may only be used by the process that created them and cannot
   be transferred. Calls from another process raise `Decibel.SessionError` with
   `reason: :not_owner`, even after the owner closes the session. Session state
-  lives until `Decibel.close/1` is called or the owner process exits, and the
-  owner's operations on a closed handle use `reason: :closed`.
+  lives until `Decibel.close/1` is called, the owner process exits, or the
+  `:decibel` OTP application stops. The owner's operations on a closed handle
+  use `reason: :closed` while that application lifetime continues.
 
   Their fields are private implementation details and must not be inspected or
   constructed by callers. See `Decibel`'s **Ownership and lifetime** section for

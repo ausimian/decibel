@@ -235,8 +235,9 @@ defmodule Decibel do
 
   `new/4` returns an opaque `t:session/0` handle. The session state belongs to
   the process that calls `new/4` and is stored in that process until `close/1`
-  is called or the owner process exits. A handle contains no cryptographic state
-  and must not be inspected or constructed by callers.
+  is called, the owner process exits, or the `:decibel` OTP application stops.
+  A handle contains no cryptographic state and must not be inspected or
+  constructed by callers.
 
   Every operation on a session must run in its owner process. Do not pass the
   handle to a task, worker, or peer process, and do not call it concurrently.
@@ -244,6 +245,10 @@ defmodule Decibel do
   `GenServer` or similar long-lived process can own a session and serialize all
   operations in its callbacks. If that process terminates, its supervisor must
   establish a new session; the old one cannot be recovered or transferred.
+  Applications must likewise keep `:decibel` started while sessions are live;
+  stopping the application ends every session lifetime, and handles retained
+  across a later application start are unknown rather than transferable or
+  recoverable sessions.
 
   Decibel does not support session ownership transfer. Using a genuine handle
   in another process raises `Decibel.SessionError` with `reason: :not_owner`,

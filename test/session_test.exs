@@ -192,19 +192,6 @@ defmodule Decibel.SessionTest do
     assert :ok == Task.await(creator)
     assert :ok == await_session_keys(100)
 
-    persistent_heir = :ets.info(:decibel_session_public_keys, :heir)
-    assert :ok == Application.stop(:decibel)
-    assert :ets.info(:decibel_session_public_keys, :owner) == persistent_heir
-
-    stopped_task =
-      Task.async(fn ->
-        capture_session_error(fn -> Decibel.get_handshake_hash(session) end)
-      end)
-
-    assert %SessionError{reason: :not_owner} = Task.await(stopped_task)
-    assert {:ok, _started} = Application.ensure_all_started(:decibel)
-    assert :ets.info(:decibel_session_public_keys, :heir) == persistent_heir
-    assert :ok == await_session_keys(100)
     assert false == Decibel.is_handshake_complete?(session)
     assert :ok == Decibel.close(session)
 

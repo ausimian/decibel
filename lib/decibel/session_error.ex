@@ -8,7 +8,8 @@ defmodule Decibel.SessionError do
     that created it, whether the session is live or closed.
   - `:closed` means the owner tried to use a session it has already closed.
   - `:unknown` means the value is not a known session handle. Legacy bare
-    references from Decibel 0.2 and all other terms use this reason.
+    references from Decibel 0.2, handles retained across a `:decibel`
+    application restart, and all other terms use this reason.
   - `:wrong_phase` means the session is live, but the operation is not valid for
     the current handshake turn or transport phase.
 
