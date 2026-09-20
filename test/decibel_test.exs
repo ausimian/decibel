@@ -2,6 +2,9 @@ defmodule DecibelTest do
   use ExUnit.Case
   doctest Decibel
 
+  @max_message_size 65_535
+  @max_transport_plaintext_size @max_message_size - 16
+
   test "Simple NN Test" do
     ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
     rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
@@ -132,6 +135,108 @@ defmodule DecibelTest do
     Decibel.close(rsp)
   end
 
+  test "transport messages are limited to 65,535 bytes" do
+    for cipher <- ["ChaChaPoly", "AESGCM"] do
+      {ini, rsp} = establish_session(cipher)
+      plaintext = [:binary.copy(<<0>>, @max_transport_plaintext_size - 1), <<1>>]
+
+      ciphertext = Decibel.encrypt(ini, plaintext)
+      assert IO.iodata_length(ciphertext) == @max_message_size
+      assert IO.iodata_to_binary(plaintext) == Decibel.decrypt(rsp, ciphertext)
+
+      assert_raise ArgumentError, fn -> Decibel.encrypt(ini, [plaintext, <<2>>]) end
+
+      assert Decibel.get_nonce(ini, :out) == 1
+      assert "after rejection" == Decibel.decrypt(rsp, Decibel.encrypt(ini, "after rejection"))
+
+      ciphertext = Decibel.encrypt(ini, plaintext)
+
+      assert_raise ArgumentError, fn -> Decibel.decrypt(rsp, [ciphertext, <<0>>]) end
+
+      assert Decibel.get_nonce(rsp, :in) == 2
+      assert IO.iodata_to_binary(plaintext) == Decibel.decrypt(rsp, ciphertext)
+
+      Decibel.close(ini)
+      Decibel.close(rsp)
+    end
+  end
+
+  test "handshake messages are limited to 65,535 bytes" do
+    max_plaintext = :binary.copy(<<0>>, @max_message_size - 32)
+    ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
+    rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
+
+    message = Decibel.handshake_encrypt(ini, max_plaintext)
+    assert IO.iodata_length(message) == @max_message_size
+
+    assert_raise ArgumentError, fn -> Decibel.handshake_decrypt(rsp, [message, <<0>>]) end
+
+    assert max_plaintext == Decibel.handshake_decrypt(rsp, message)
+
+    Decibel.close(ini)
+    Decibel.close(rsp)
+
+    ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
+    rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
+
+    assert_raise ArgumentError, fn -> Decibel.handshake_encrypt(ini, [max_plaintext, <<0>>]) end
+
+    message = Decibel.handshake_encrypt(ini)
+    assert "" == Decibel.handshake_decrypt(rsp, message)
+
+    Decibel.close(ini)
+    Decibel.close(rsp)
+  end
+
+  test "encrypted handshake payloads account for their authentication tag" do
+    max_plaintext = :binary.copy(<<0>>, @max_message_size - 32 - 16)
+    {ini, rsp} = start_nn_handshake()
+
+    message = Decibel.handshake_encrypt(rsp, max_plaintext)
+    assert IO.iodata_length(message) == @max_message_size
+    assert max_plaintext == Decibel.handshake_decrypt(ini, message)
+
+    Decibel.close(ini)
+    Decibel.close(rsp)
+
+    {ini, rsp} = start_nn_handshake()
+
+    assert_raise ArgumentError, fn -> Decibel.handshake_encrypt(rsp, [max_plaintext, <<0>>]) end
+
+    message = Decibel.handshake_encrypt(rsp)
+    assert "" == Decibel.handshake_decrypt(ini, message)
+
+    Decibel.close(ini)
+    Decibel.close(rsp)
+  end
+
   defp flip_first_two_bytes(<<fst, snd, rest::binary>>), do: <<snd, fst, rest::binary>>
   defp flip_first_two_bytes(iodata), do: flip_first_two_bytes(IO.iodata_to_binary(iodata))
+
+  defp establish_session(cipher) do
+    protocol = "Noise_NN_25519_#{cipher}_BLAKE2s"
+    ini = Decibel.new(protocol, :ini)
+    rsp = Decibel.new(protocol, :rsp)
+
+    ini
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(rsp, &1))
+
+    rsp
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(ini, &1))
+
+    {ini, rsp}
+  end
+
+  defp start_nn_handshake do
+    ini = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
+    rsp = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
+
+    ini
+    |> Decibel.handshake_encrypt()
+    |> then(&Decibel.handshake_decrypt(rsp, &1))
+
+    {ini, rsp}
+  end
 end

@@ -122,6 +122,11 @@ defmodule Decibel do
   'associated authenticated data' to be specified, that provides message-integrity
   assurance for the application data.
 
+  Each call encrypts or decrypts exactly one Noise transport message. Noise messages
+  are limited to 65,535 bytes, so transport plaintexts are limited to 65,519 bytes
+  after allowing for the 16-byte authentication tag. Applications must split and
+  frame larger logical messages before passing them to Decibel.
+
   Once the session is complete, each party should call `close/1` to free the
   resources associated with the it.
 
@@ -213,6 +218,9 @@ defmodule Decibel do
 
   alias Decibel.{ChannelPair, Handshake}
 
+  @max_message_size 65_535
+  @max_transport_plaintext_size @max_message_size - 16
+
   @doc """
   Start a new handshake.
 
@@ -248,10 +256,17 @@ defmodule Decibel do
   > of any secure channel have not yet been established. Such data may even be sent in
   > the clear. Consult the [Payload Security Properties](https://noiseprotocol.org/noise.html#payload-security-properties)
   > in the specification for more information.
+
+  Raises `ArgumentError` if the complete handshake message would exceed the Noise
+  limit of 65,535 bytes. The maximum application-data size varies with the handshake
+  pattern and cryptographic primitives because public keys and authentication tags
+  are part of the same message.
   """
   @spec handshake_encrypt(reference(), iodata()) :: iodata()
   def handshake_encrypt(ref, plaintext \\ []) when is_reference(ref) do
+    validate_size!(plaintext, @max_message_size, "handshake plaintext")
     {hs, ciphertext} = Handshake.write_message(Process.get(ref), plaintext)
+    validate_size!(ciphertext, @max_message_size, "handshake message")
     Process.put(ref, hs)
     ciphertext
   end
@@ -261,10 +276,11 @@ defmodule Decibel do
   data.
 
   The function will raise a `Decibel.DecryptionError` if the handshake data does not
-  decrypt correctly.
+  decrypt correctly, or `ArgumentError` if the message exceeds 65,535 bytes.
   """
   @spec handshake_decrypt(reference(), iodata()) :: iodata()
   def handshake_decrypt(ref, ciphertext) when is_reference(ref) do
+    validate_size!(ciphertext, @max_message_size, "handshake message")
     {hs, plaintext} = Handshake.read_message(Process.get(ref), ciphertext)
     Process.put(ref, hs)
     plaintext
@@ -298,9 +314,13 @@ defmodule Decibel do
   provided AAD for message integrity.
 
   Returns the encrypted message.
+
+  Raises `ArgumentError` if `plaintext` exceeds 65,519 bytes, the largest plaintext
+  that leaves room for the 16-byte authentication tag within a Noise message.
   """
   @spec encrypt(reference(), iodata(), iodata()) :: iodata()
   def encrypt(ref, plaintext, ad \\ []) do
+    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
     {cs, ciphertext} = ChannelPair.write_message(Process.get(ref), ad, plaintext)
     Process.put(ref, cs)
     ciphertext
@@ -310,11 +330,12 @@ defmodule Decibel do
   Decrypts a message over an established session, using an optionally
   provided AAD for message integrity.
 
-  Returns the decrypted message, or raises a `RuntimeException` if the
-  message cannot be decrypted.
+  Returns the decrypted message. Raises `Decibel.DecryptionError` if the message
+  cannot be decrypted, or `ArgumentError` if it exceeds 65,535 bytes.
   """
   @spec decrypt(reference(), iodata(), iodata()) :: iodata()
   def decrypt(ref, ciphertext, ad \\ []) do
+    validate_size!(ciphertext, @max_message_size, "transport message")
     {cs, plaintext} = ChannelPair.read_message(Process.get(ref), ad, ciphertext)
     Process.put(ref, cs)
     plaintext
@@ -364,5 +385,16 @@ defmodule Decibel do
   @spec get_remote_key(reference) :: nil | binary()
   def get_remote_key(ref) when is_reference(ref) do
     Map.get(Process.get(ref), :rs)
+  end
+
+  defp validate_size!(data, maximum, description) do
+    case IO.iodata_length(data) do
+      size when size <= maximum ->
+        :ok
+
+      size ->
+        raise ArgumentError,
+              "#{description} must not exceed #{maximum} bytes, got #{size} bytes"
+    end
   end
 end
