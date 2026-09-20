@@ -31,7 +31,7 @@ Before using Decibel, applications must:
   using certificates, an allow list, pinning, or another trust policy;
 - follow the specification's
   [key-reuse rules](https://noiseprotocol.org/noise.html#security-considerations)
-  by keeping static keys and PSKs inside Noise and one hash family, provision
+  by keeping static keys and PSKs inside Noise and one hash algorithm, provision
   PSKs with the required
   [256 bits of entropy](https://noiseprotocol.org/noise.html#security-considerations),
   and
