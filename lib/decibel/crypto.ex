@@ -7,7 +7,9 @@ defmodule Decibel.Crypto do
   @type public_key() :: :crypto.dh_public()
   @type private_key() :: :crypto.dh_private()
 
-  @rekey 2 ** 64 - 1
+  @reserved_nonce 2 ** 64 - 1
+
+  @type nonce() :: 0..18_446_744_073_709_551_615
 
   @doc """
   Performs a Diffie-Hellman calculation between the private key of `keypair`
@@ -51,7 +53,7 @@ defmodule Decibel.Crypto do
   returns a ciphertext that is the same size as the plaintext plus 16 bytes
   for authentication data.
   """
-  @spec encrypt(cipher(), <<_::256>>, non_neg_integer(), iodata(), iodata()) :: iolist()
+  @spec encrypt(cipher(), <<_::256>>, nonce(), iodata(), iodata()) :: iolist()
   def encrypt(cipher, <<key::binary-size(32)>>, nonce, aad, plaintext) do
     iv = cipher_iv(cipher, nonce)
 
@@ -67,7 +69,7 @@ defmodule Decibel.Crypto do
   integer nonce, and associated data aad. Returns the plaintext, unless
   authentication fails, in which case an error is signaled to the caller.
   """
-  @spec decrypt(cipher(), <<_::256>>, non_neg_integer(), iodata(), iodata()) :: binary() | :error
+  @spec decrypt(cipher(), <<_::256>>, nonce(), iodata(), iodata()) :: binary() | :error
   def decrypt(cipher, <<key::binary-size(32)>>, nonce, aad, crypttext) do
     bytes = IO.iodata_to_binary(crypttext)
     {data, tag} = :erlang.split_binary(bytes, byte_size(bytes) - 16)
@@ -79,7 +81,7 @@ defmodule Decibel.Crypto do
   """
   @spec rekey(cipher(), <<_::256>>) :: <<_::256>>
   def rekey(cipher, <<key::binary-size(32)>>) do
-    with [rekeyed, _] <- encrypt(cipher, key, @rekey, <<>>, <<0::256>>) do
+    with [rekeyed, _] <- encrypt(cipher, key, @reserved_nonce, <<>>, <<0::256>>) do
       rekeyed
     end
   end
@@ -131,7 +133,8 @@ defmodule Decibel.Crypto do
     :crypto.mac(:hmac, f, key, data)
   end
 
-  defp cipher_iv(cipher, nonce) when is_integer(nonce) and nonce >= 0 and nonce <= @rekey do
+  defp cipher_iv(cipher, nonce)
+       when is_integer(nonce) and nonce >= 0 and nonce <= @reserved_nonce do
     case cipher do
       :chacha20_poly1305 ->
         <<0::32, nonce::64-little>>

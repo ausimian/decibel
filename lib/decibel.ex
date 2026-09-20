@@ -134,6 +134,11 @@ defmodule Decibel do
   after allowing for the 16-byte authentication tag. Applications must split and
   frame larger logical messages before passing them to Decibel.
 
+  Each keyed channel may use nonces from `0` through `2^64 - 2`. Consuming the
+  final nonce exhausts that channel; later encryption or decryption raises
+  `Decibel.NonceError`. An exhausted channel cannot be revived by `rekey/2`,
+  so the application must close it and establish a new session.
+
   Once the session is complete, each party should call `close/1` to free the
   resources associated with the it.
 
@@ -227,7 +232,7 @@ defmodule Decibel do
   @typedoc "The role the party plays in the protocol."
   @type role :: :ini | :rsp
 
-  alias Decibel.{ChannelPair, Handshake}
+  alias Decibel.{ChannelPair, Cipher, Handshake}
 
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
@@ -330,6 +335,8 @@ defmodule Decibel do
   that leaves room for the 16-byte authentication tag within a Noise message.
   Raises `Decibel.TransportDirectionError` before any state change if outbound
   transport is not permitted by a one-way handshake.
+  Raises `Decibel.NonceError` without changing state if the outbound channel's
+  nonce is exhausted.
   """
   @spec encrypt(reference(), iodata(), iodata()) :: iodata()
   def encrypt(ref, plaintext, ad \\ []) do
@@ -347,6 +354,8 @@ defmodule Decibel do
   cannot be decrypted, or `ArgumentError` if it exceeds 65,535 bytes.
   Raises `Decibel.TransportDirectionError` before any state change if inbound
   transport is not permitted by a one-way handshake.
+  Raises `Decibel.NonceError` without changing state if the inbound channel's
+  nonce is exhausted.
   """
   @spec decrypt(reference(), iodata(), iodata()) :: iodata()
   def decrypt(ref, ciphertext, ad \\ []) do
@@ -383,10 +392,13 @@ defmodule Decibel do
   @doc """
   Get the current nonce value of the specified cipher.
 
+  After the final usable nonce, `2^64 - 2`, is consumed, this returns the
+  reserved value `2^64 - 1` to indicate that the channel is exhausted.
+
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
   """
-  @spec get_nonce(reference(), :in | :out) :: non_neg_integer
+  @spec get_nonce(reference(), :in | :out) :: Cipher.nonce()
   def get_nonce(ref, dir) when is_reference(ref) and dir in [:in, :out] do
     ChannelPair.get_n(Process.get(ref), dir)
   end
@@ -394,11 +406,15 @@ defmodule Decibel do
   @doc """
   Set the current value of nonce for the specified cipher.
 
+  The nonce must be an integer from `0` through `2^64 - 2`.
+
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
+  Raises `Decibel.NonceError` without changing state if the nonce is outside
+  the usable range.
   """
-  @spec set_nonce(reference(), :in | :out, non_neg_integer()) :: :ok
-  def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] and is_integer(n) and n >= 0 do
+  @spec set_nonce(reference(), :in | :out, Cipher.usable_nonce()) :: :ok
+  def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] do
     Process.put(ref, ChannelPair.set_n(Process.get(ref), dir, n))
     :ok
   end
