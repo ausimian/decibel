@@ -154,7 +154,7 @@ defmodule VectorTest do
       end
 
     opts = if vec["fallback"], do: [swap: :rsp], else: [swap: :ini]
-    Decibel.new(protocol_name, role, keys, opts)
+    Decibel.Unsafe.new(protocol_name, role, keys, opts)
   end
 
   defp one_way?(protocol_name) do
