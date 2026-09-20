@@ -12,6 +12,158 @@ defmodule Decibel do
   The rest of this document assumes the reader is familiar with the above
   specification.
 
+  ## Security posture
+
+  Decibel implements [Noise revision 34](https://noiseprotocol.org/noise.html).
+  Revision 34 is marked `official/unstable`; its
+  [change log](https://noiseprotocol.org/noise.html#change-log) says that the
+  unstable marking applies only to the new deferred patterns and that the rest
+  of the document is considered stable.
+
+  The built-in registry supports these handshake patterns:
+
+  - One-way: `N`, `K`, and `X`.
+  - Fundamental interactive: `NN`, `KN`, `NK`, `KK`, `NX`, `KX`, `XN`,
+    `IN`, `XK`, `IK`, `XX`, and `IX`.
+  - Deferred interactive: `NK1`, `NX1`, `X1N`, `X1K`, `XK1`, `X1K1`,
+    `X1X`, `XX1`, `X1X1`, `K1N`, `K1K`, `KK1`, `K1K1`, `K1X`, `KX1`,
+    `K1X1`, `I1N`, `I1K`, `IK1`, `I1K1`, `I1X`, `IX1`, and `I1X1`.
+
+  Decibel also supports applicable `pskN` and `fallback` modifiers. Supported
+  primitives are:
+
+  - DH: `25519` (X25519) and `448` (X448).
+  - Cipher: `ChaChaPoly` (ChaCha20-Poly1305) and `AESGCM` (AES-256-GCM).
+  - Hash: `SHA256`, `SHA512`, `BLAKE2s`, and `BLAKE2b`.
+
+  Custom patterns supplied through the `:registry` option are outside this
+  supported surface and are not covered by the built-in pattern claims or
+  vector suite.
+
+  The test suite exercises checked-in known-answer vectors sourced from
+  [Cacophony](https://github.com/haskell-cryptography/cacophony),
+  [Snow](https://github.com/mcginty/snow), and
+  [noise-c](https://github.com/rweather/noise-c) fallback vectors. Passing
+  these vectors demonstrates interoperability for the tested inputs; it is not
+  a security audit or a guarantee about an application's surrounding protocol.
+
+  The package declares Elixir `~> 1.18`. CI currently tests Elixir 1.18 with
+  OTP 27, Elixir 1.19 with OTP 27 and 28, and Elixir 1.20 with OTP 27 through
+  29 on Linux and macOS. Cryptographic operations use Erlang/OTP's `:crypto`
+  application. Decibel has no pluggable crypto provider, so the implementation
+  and availability of these primitives depend on the OTP installation.
+
+  > #### Security review and production use {: .warning}
+  >
+  > Decibel has not received an independent security audit or formal
+  > verification. It is pre-1.0 and has not been declared production-ready.
+  > Applications considering production use must review Decibel and their
+  > complete protocol, key management, failure policy, and deployment against
+  > their own threat model.
+
+  Decibel's non-goals include transport I/O, message framing, protocol
+  negotiation, peer identity or trust policy, long-term key storage, secure
+  memory erasure, application payload parsing or padding, and connectionless
+  replay state.
+
+  ## Safe use
+
+  ### Pattern and primitive selection
+
+  Select a handshake pattern whose
+  [payload security properties](https://noiseprotocol.org/noise.html#payload-security-properties)
+  match the application's authentication, identity-hiding, forward-secrecy, and
+  latency requirements.
+
+  Noise's
+  [application responsibilities](https://noiseprotocol.org/noise.html#application-responsibilities)
+  recommend `25519` for typical use and say `448` should be paired with a
+  512-bit hash such as `SHA512` or `BLAKE2b`. The specification also limits
+  [AESGCM data under one key](https://noiseprotocol.org/noise.html#security-considerations)
+  to 2^56 bytes; choose another cipher or re-handshake before that bound could
+  be reached.
+
+  ### Authentication and key handling
+
+  A pattern containing static keys proves possession only where that pattern's
+  security properties say it does. The application must decide whether a
+  remote static key is acceptable, for example through a certificate,
+  configured allow list, pinning, or key continuity. See the specification's
+  [authentication guidance](https://noiseprotocol.org/noise.html#security-considerations)
+  and authenticate the value available through `get_remote_key/1`.
+
+  The specification's
+  [key-reuse rules](https://noiseprotocol.org/noise.html#security-considerations)
+  require a Noise static keypair to stay within Noise and one hash algorithm.
+  A PSK must likewise stay within Noise and one hash algorithm, and must be a
+  secret value with 256 bits of entropy. Decibel verifies that each PSK is 32
+  bytes, but cannot verify its entropy or provenance; passwords and
+  low-entropy tokens are not suitable PSKs. For every reused secret, the
+  protocol name must uniquely identify the handshake pattern and cryptographic
+  operations performed with that key.
+
+  Every ordinary handshake generates a fresh local ephemeral keypair when its
+  outbound `e` token is processed. Caller-supplied `:e` and `:re` values are
+  accepted only for their corresponding fallback pre-messages. That reuse is
+  part of the same compound-protocol run and does not make ephemeral reuse
+  between sessions safe. The r34
+  [ephemeral-key rule](https://noiseprotocol.org/noise.html#security-considerations)
+  warns that reuse is likely to cause catastrophic key reuse.
+
+  ### Negotiation and rollback
+
+  Decibel does not negotiate protocol names, versions, roles, or application
+  capabilities. If peers communicate negotiation data before the handshake,
+  include a canonical encoding of that context in the same `:prologue` at both
+  peers, or authenticate it through an equivalent higher-level design. The r34
+  [rollback guidance](https://noiseprotocol.org/noise.html#security-considerations)
+  warns that negotiation not included in the prologue can permit downgrade
+  attacks.
+
+  ### Framing, payloads, and termination
+
+  Each Decibel handshake or transport operation processes exactly one Noise
+  message. The application must frame message boundaries and enforce the
+  65,535-byte Noise message limit. It must also authenticate length or
+  termination information inside its payload protocol so an attacker cannot
+  silently truncate a transport stream. Noise's
+  [application responsibilities](https://noiseprotocol.org/noise.html#application-responsibilities)
+  discuss framing, truncation, extensible payloads, and padding.
+
+  ### Nonces, replay protection, and rekeying
+
+  Never encrypt two messages under the same key and nonce. Decibel increments
+  outbound nonces, rejects outbound rewinds, and raises `Decibel.NonceError`
+  at exhaustion. For connectionless transport, `set_nonce/3` selects an inbound
+  nonce but does not provide replay protection. The application must retain a
+  bounded replay window, reject every nonce that has already authenticated, and
+  record a nonce only after successful decryption. See
+  [Connectionless Transports](#module-connectionless-transports) for a complete
+  example and the specification's
+  [out-of-order transport guidance](https://noiseprotocol.org/noise.html#out-of-order-transport-messages).
+
+  `rekey/2` changes one directional key without resetting its nonce. Peers must
+  coordinate rekeying independently in each direction, preserve their nonce and
+  replay state, and expect delayed packets under the old key to fail. Close the
+  session and perform a new handshake after nonce exhaustion. See the
+  specification's [rekey guidance](https://noiseprotocol.org/noise.html#rekey).
+
+  ### Failure handling
+
+  Abandon a failed handshake unless the application is deliberately executing
+  a reviewed compound protocol such as Noise Pipes fallback. For a transport
+  authentication failure, discard the message and choose explicitly whether
+  the threat model calls for closing the session or continuing. The Noise
+  [processing rules](https://noiseprotocol.org/noise.html#processing-rules)
+  permit either transport policy; unauthenticated plaintext must never be used.
+  Do not expose detailed failure distinctions to an untrusted peer.
+
+  Invalid construction and message-size inputs raise `ArgumentError`. Malformed,
+  truncated, unauthenticated, or invalid-key peer messages raise
+  `Decibel.DecryptionError` without committing state. Nonce failures raise
+  `Decibel.NonceError`, and operations on a discarded one-way direction raise
+  `Decibel.TransportDirectionError`.
+
   ## Overview
   Decibel encrypts and decrypts messages according to the Noise Protocol,
   and the client's selection of handshake and cryptographic primitives. It does
@@ -351,6 +503,10 @@ defmodule Decibel do
   generated internally when their outbound `e` token is processed. The list of provided
   keys should be identified as follows:
 
+  Before constructing a session, review
+  [Authentication and key handling](#module-authentication-and-key-handling) and
+  [Negotiation and rollback](#module-negotiation-and-rollback).
+
   - `:s`: the party's public-private static key pair as a tuple. It is required
     whenever the selected role uses a static key anywhere in the fully modified pattern.
   - `:rs`: the peer's public static key as a binary, only when the peer has a
@@ -408,6 +564,10 @@ defmodule Decibel do
   > the clear. Consult the [Payload Security Properties](https://noiseprotocol.org/noise.html#payload-security-properties)
   > in the specification for more information.
 
+  Applications are responsible for
+  [framing and authenticating termination](#module-framing-payloads-and-termination)
+  and for their [failure policy](#module-failure-handling).
+
   Raises `ArgumentError` if the complete handshake message would exceed the Noise
   limit of 65,535 bytes. The maximum application-data size varies with the handshake
   pattern and cryptographic primitives because public keys and authentication tags
@@ -436,6 +596,9 @@ defmodule Decibel do
   processed. Its `:remote_keys` field contains keys processed before the failure,
   and the stored handshake state remains unchanged. Raises `ArgumentError` if the
   message exceeds 65,535 bytes.
+
+  See [Failure handling](#module-failure-handling) before deciding whether to
+  abandon the handshake or enter a reviewed fallback protocol.
   """
   @spec handshake_decrypt(reference(), iodata()) :: iodata()
   def handshake_decrypt(ref, ciphertext) when is_reference(ref) do
@@ -474,6 +637,11 @@ defmodule Decibel do
 
   Returns the encrypted message.
 
+  The application must provide
+  [framing and authenticated termination](#module-framing-payloads-and-termination)
+  and follow the
+  [nonce and rekeying guidance](#module-nonces-replay-protection-and-rekeying).
+
   Raises `ArgumentError` if `plaintext` exceeds 65,519 bytes, the largest plaintext
   that leaves room for the 16-byte authentication tag within a Noise message.
   Raises `Decibel.TransportDirectionError` before any state change if outbound
@@ -501,6 +669,9 @@ defmodule Decibel do
   transport is not permitted by a one-way handshake.
   Raises `Decibel.NonceError` without changing state if the inbound channel's
   nonce is exhausted.
+
+  See [Failure handling](#module-failure-handling) for the policy an application
+  must apply to unauthenticated transport messages.
   """
   @spec decrypt(reference(), iodata(), iodata()) :: iodata()
   def decrypt(ref, ciphertext, ad \\ []) do
@@ -531,6 +702,10 @@ defmodule Decibel do
   replay window as well; delayed messages encrypted under the old key cannot be
   decrypted after rekeying.
 
+  See
+  [Nonces, replay protection, and rekeying](#module-nonces-replay-protection-and-rekeying)
+  for the application responsibilities around this operation.
+
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
   """
@@ -546,7 +721,9 @@ defmodule Decibel do
   Connectionless senders should read the outbound nonce immediately before
   calling `encrypt/3` and send that value with the ciphertext. See
   [Connectionless Transports](#module-connectionless-transports) for the replay
-  protection the recipient must provide.
+  protection the recipient must provide, and
+  [Nonces, replay protection, and rekeying](#module-nonces-replay-protection-and-rekeying)
+  for the safe-use requirements.
 
   After the final usable nonce, `2^64 - 2`, is consumed, this returns the
   reserved value `2^64 - 1` to indicate that the channel is exhausted.
@@ -581,6 +758,10 @@ defmodule Decibel do
   selected direction is not permitted by a one-way handshake.
   Raises `Decibel.NonceError` without changing state if the nonce is outside
   the usable range or would move the outbound channel backwards.
+
+  See
+  [Nonces, replay protection, and rekeying](#module-nonces-replay-protection-and-rekeying)
+  before using this low-level operation.
   """
   @spec set_nonce(reference(), :in | :out, Cipher.usable_nonce()) :: :ok
   def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] do
@@ -590,6 +771,10 @@ defmodule Decibel do
 
   @doc """
   Get the remote (static) key if available.
+
+  A returned key is protocol output, not a trust decision. Authenticate it
+  according to
+  [Authentication and key handling](#module-authentication-and-key-handling).
   """
   @spec get_remote_key(reference) :: nil | binary()
   def get_remote_key(ref) when is_reference(ref) do
