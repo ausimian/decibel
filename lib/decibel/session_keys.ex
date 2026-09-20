@@ -5,8 +5,11 @@ defmodule Decibel.SessionKeys do
 
   @public_keys :decibel_session_public_keys
 
-  @spec start_link(binary()) :: GenServer.on_start()
-  def start_link(public_key), do: GenServer.start_link(__MODULE__, public_key, name: __MODULE__)
+  @spec start_link(term()) :: GenServer.on_start()
+  def start_link(_options), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+
+  @spec keypair() :: {:ok, {binary(), binary()}} | :error
+  def keypair, do: GenServer.call(__MODULE__, :keypair)
 
   @spec public_key() :: {:ok, binary()} | :error
   def public_key do
@@ -19,7 +22,11 @@ defmodule Decibel.SessionKeys do
   end
 
   @impl true
-  def init(public_key) do
+  def init(:ok) do
+    {public_key, _private_key} = keypair = recover_or_generate_keypair()
+    secrets = :ets.new(__MODULE__, [:set, :private])
+    :ets.insert(secrets, {:keypair, keypair})
+
     table =
       :ets.new(@public_keys, [
         :named_table,
@@ -29,6 +36,26 @@ defmodule Decibel.SessionKeys do
       ])
 
     :ets.insert(table, {:public_key, public_key})
-    {:ok, table}
+    {:ok, secrets}
+  end
+
+  @impl true
+  def handle_call(:keypair, {caller, _tag}, secrets) do
+    if caller == Process.whereis(Decibel.SessionIssuer) do
+      {:reply, {:ok, :ets.lookup_element(secrets, :keypair, 2)}, secrets}
+    else
+      {:reply, :error, secrets}
+    end
+  end
+
+  defp recover_or_generate_keypair do
+    case Process.whereis(Decibel.SessionIssuer) do
+      nil ->
+        :crypto.generate_key(:eddsa, :ed25519)
+
+      _issuer ->
+        {:ok, keypair} = Decibel.SessionIssuer.keypair()
+        keypair
+    end
   end
 end

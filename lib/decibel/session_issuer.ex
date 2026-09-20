@@ -4,10 +4,13 @@ defmodule Decibel.SessionIssuer do
   use GenServer
 
   @spec start_link(term()) :: GenServer.on_start()
-  def start_link(keypair), do: GenServer.start_link(__MODULE__, keypair, name: __MODULE__)
+  def start_link(_options), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
   @spec issue() :: {reference(), reference(), binary()}
   def issue, do: GenServer.call(__MODULE__, :issue)
+
+  @spec keypair() :: {:ok, {binary(), binary()}} | :error
+  def keypair, do: GenServer.call(__MODULE__, :keypair)
 
   @spec issued?(pid(), reference(), reference(), binary()) :: boolean()
   def issued?(owner, id, status, proof)
@@ -27,9 +30,10 @@ defmodule Decibel.SessionIssuer do
   def issued?(_owner, _id, _status, _proof), do: false
 
   @impl true
-  def init({_public_key, private_key}) do
+  def init(:ok) do
+    {:ok, keypair} = Decibel.SessionKeys.keypair()
     secrets = :ets.new(__MODULE__, [:set, :private])
-    :ets.insert(secrets, {:private_key, private_key})
+    :ets.insert(secrets, {:keypair, keypair})
     {:ok, secrets}
   end
 
@@ -41,8 +45,16 @@ defmodule Decibel.SessionIssuer do
     {:reply, {id, status, proof}, secrets}
   end
 
+  def handle_call(:keypair, {caller, _tag}, secrets) do
+    if caller == Process.whereis(Decibel.SessionKeys) do
+      {:reply, {:ok, :ets.lookup_element(secrets, :keypair, 2)}, secrets}
+    else
+      {:reply, :error, secrets}
+    end
+  end
+
   defp proof(secrets, owner, id, status) do
-    private_key = :ets.lookup_element(secrets, :private_key, 2)
+    {_public_key, private_key} = :ets.lookup_element(secrets, :keypair, 2)
     data = proof_data(owner, id, status)
     :crypto.sign(:eddsa, :none, data, [private_key, :ed25519])
   end

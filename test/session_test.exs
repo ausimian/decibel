@@ -144,13 +144,14 @@ defmodule Decibel.SessionTest do
            end)
   end
 
-  test "issued handles survive issuer restarts without serializing validation" do
+  test "issued handles survive signing component restarts without serialized validation" do
     session = Decibel.new(@nn_protocol, :ini)
     original_issuer = Process.whereis(Decibel.SessionIssuer)
 
     on_exit(fn ->
-      if is_nil(Process.whereis(Decibel.SessionIssuer)) do
-        Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionIssuer)
+      for child <- [Decibel.SessionKeys, Decibel.SessionIssuer],
+          is_nil(Process.whereis(child)) do
+        Supervisor.restart_child(Decibel.Supervisor, child)
       end
     end)
 
@@ -161,6 +162,15 @@ defmodule Decibel.SessionTest do
              Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionIssuer)
 
     refute restarted_issuer == original_issuer
+
+    original_keys = Process.whereis(Decibel.SessionKeys)
+    assert :ok == Supervisor.terminate_child(Decibel.Supervisor, Decibel.SessionKeys)
+
+    assert {:ok, restarted_keys} =
+             Supervisor.restart_child(Decibel.Supervisor, Decibel.SessionKeys)
+
+    refute restarted_keys == original_keys
+    assert false == Decibel.is_handshake_complete?(session)
     assert :ok == Decibel.close(session)
 
     new_session = Decibel.new(@nn_protocol, :ini)
