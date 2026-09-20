@@ -1,6 +1,6 @@
 defmodule Decibel.ChannelPair do
   @moduledoc false
-  alias Decibel.{Cipher, TransportDirectionError}
+  alias Decibel.{Cipher, NonceError, TransportDirectionError}
   use TypedStruct
 
   @type mode :: :interactive | :one_way
@@ -65,8 +65,14 @@ defmodule Decibel.ChannelPair do
 
   def set_n(%__MODULE__{out: nil}, :out, _n), do: raise_direction_error(:out)
 
-  def set_n(%__MODULE__{out: %Cipher{} = cout} = state, :out, n) do
-    %__MODULE__{state | out: Cipher.set_nonce(cout, n)}
+  def set_n(%__MODULE__{out: %Cipher{n: current} = cout} = state, :out, n) do
+    updated = Cipher.set_nonce(cout, n)
+
+    if n < current do
+      raise NonceError, reason: :rewind, nonce: n, current_nonce: current
+    end
+
+    %__MODULE__{state | out: updated}
   end
 
   defp raise_direction_error(direction), do: raise(TransportDirectionError, direction: direction)

@@ -1,5 +1,12 @@
 ### Changed
 
+- **Breaking:** Reject attempts to move an outbound transport nonce backwards,
+  preventing accidental key/nonce reuse. Callers should read the next outbound
+  nonce with `get_nonce/2`; forward skips and inbound nonce selection remain
+  available through `set_nonce/3`.
+- Make connectionless replay protection explicitly application-owned, with a
+  bounded replay-window example that records nonces only after successful
+  authentication and guidance for coordinated rekeying.
 - **Breaking:** Generate a fresh local ephemeral keypair for every ordinary
   handshake and reject caller-supplied `:e` keypairs outside fallback
   pre-messages, preventing accidental transport-key and nonce reuse across

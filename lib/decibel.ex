@@ -221,27 +221,98 @@ defmodule Decibel do
   uses only the outbound operations and the recipient uses only the inbound
   operations shown below.
 
-  This example shows how to send data over such a transport:
+  > #### Danger: replay and nonce reuse {: .warning}
+  >
+  > A recipient using `set_nonce/3` must track every nonce that decrypted
+  > successfully and reject duplicates; otherwise an attacker can replay an
+  > authenticated message. An outbound nonce must never be reused with the same
+  > key. Decibel deliberately exposes a low-level nonce API and does not provide
+  > a replay-protected decrypt today, so the application owns this replay state.
+
+  A sender reads the nonce that `encrypt/3` will consume and sends it alongside
+  the ciphertext:
 
   ```elixir
-  # First, grab the nonce for the outbound channel
-  n = Decibel.get_nonce(ref, :out)
-  # Encrypt the data
-  ciphertext = Decibel.encrypt(ref, plaintext, aad)
-  # Send both the nonce and the ciphertext
-  send(peer, {n, ciphertext})
+  nonce = Decibel.get_nonce(sender, :out)
+  ciphertext = Decibel.encrypt(sender, plaintext, aad)
+  send(peer, {nonce, ciphertext})
   ```
 
-  The receiving side is as follows:
+  The recipient needs a bounded replay window. This example retains the latest
+  64 nonce values. A nonce at the lower edge is accepted; older messages are
+  rejected as stale even if they were never received, keeping memory bounded.
 
   ```elixir
-  # Receive the message
-  {n, ciphertext} = get_msg_from(peer)
-  # Set the nonce for the inbound channel using the received n
-  :ok = Decibel.set_nonce(ref, :in, n)
-  # Decrypt the ciphertext
-  plaintext = Decibel.decrypt(ref, ciphertext, aad)
+  defmodule ConnectionlessReplayWindow do
+    @moduledoc false
+    @size 64
+    @max_nonce 2 ** 64 - 2
+
+    def new, do: %{highest: nil, seen: MapSet.new()}
+
+    def decrypt(ref, nonce, ciphertext, aad, window) do
+      :ok = validate_nonce(ref, nonce)
+
+      cond do
+        MapSet.member?(window.seen, nonce) ->
+          {:error, :duplicate, window}
+
+        stale?(window, nonce) ->
+          {:error, :stale, window}
+
+        true ->
+          :ok = Decibel.set_nonce(ref, :in, nonce)
+
+          try do
+            plaintext = Decibel.decrypt(ref, ciphertext, aad)
+            {:ok, plaintext, remember(window, nonce)}
+          rescue
+            error in Decibel.DecryptionError -> {:error, error, window}
+          end
+      end
+    end
+
+    defp validate_nonce(_ref, nonce)
+         when is_integer(nonce) and nonce >= 0 and nonce <= @max_nonce,
+         do: :ok
+
+    defp validate_nonce(ref, nonce), do: Decibel.set_nonce(ref, :in, nonce)
+
+    defp stale?(%{highest: nil}, _nonce), do: false
+    defp stale?(%{highest: highest}, nonce), do: nonce <= highest - @size
+
+    defp remember(window, nonce) do
+      highest = max(window.highest || nonce, nonce)
+
+      seen =
+        window.seen
+        |> MapSet.put(nonce)
+        |> Enum.filter(&(&1 > highest - @size))
+        |> MapSet.new()
+
+      %{highest: highest, seen: seen}
+    end
+  end
+
+  window = ConnectionlessReplayWindow.new()
+  {nonce, ciphertext} = get_msg_from(peer)
+
+  {:ok, plaintext, window} =
+    ConnectionlessReplayWindow.decrypt(recipient, nonce, ciphertext, aad, window)
+
+  # A second delivery is rejected before Decibel decrypts it.
+  {:error, :duplicate, ^window} =
+    ConnectionlessReplayWindow.decrypt(recipient, nonce, ciphertext, aad, window)
   ```
+
+  The window changes only after authentication succeeds. A failed ciphertext
+  therefore does not prevent a later authentic packet with the same nonce from
+  being tried.
+
+  `rekey/2` changes the key but deliberately preserves the nonce. Peers must
+  coordinate rekeying independently in each direction and must not reset their
+  counters or replay windows when they rekey. Once a receive key is replaced,
+  delayed packets encrypted under the old key can no longer be decrypted.
 
   """
 
@@ -454,6 +525,12 @@ defmodule Decibel do
   @doc """
   Rekey the inbound or outbound channel of the session.
 
+  Noise rekeying changes the selected channel's key but does not reset its
+  nonce. Applications must coordinate rekeying with the peer and continue the
+  existing counter. For connectionless transports, retain the corresponding
+  replay window as well; delayed messages encrypted under the old key cannot be
+  decrypted after rekeying.
+
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
   """
@@ -465,6 +542,11 @@ defmodule Decibel do
 
   @doc """
   Get the current nonce value of the specified cipher.
+
+  Connectionless senders should read the outbound nonce immediately before
+  calling `encrypt/3` and send that value with the ciphertext. See
+  [Connectionless Transports](#module-connectionless-transports) for the replay
+  protection the recipient must provide.
 
   After the final usable nonce, `2^64 - 2`, is consumed, this returns the
   reserved value `2^64 - 1` to indicate that the channel is exhausted.
@@ -480,12 +562,25 @@ defmodule Decibel do
   @doc """
   Set the current value of nonce for the specified cipher.
 
+  > #### Danger: low-level nonce control {: .warning}
+  >
+  > This function does not provide replay protection. Applications selecting
+  > inbound nonces must reject every nonce that has already authenticated and
+  > must record a nonce only after successful decryption. Applications should
+  > normally read outbound nonces with `get_nonce/2`; moving an outbound nonce
+  > backwards is rejected because reusing a nonce with the same key is a
+  > catastrophic AEAD failure.
+
   The nonce must be an integer from `0` through `2^64 - 2`.
+
+  An inbound nonce may be selected in any order. An outbound nonce may remain
+  unchanged or move forward, but cannot move backwards. A rejected operation
+  leaves session state unchanged.
 
   Raises `Decibel.TransportDirectionError` before any state change if the
   selected direction is not permitted by a one-way handshake.
   Raises `Decibel.NonceError` without changing state if the nonce is outside
-  the usable range.
+  the usable range or would move the outbound channel backwards.
   """
   @spec set_nonce(reference(), :in | :out, Cipher.usable_nonce()) :: :ok
   def set_nonce(ref, dir, n) when is_reference(ref) and dir in [:in, :out] do
