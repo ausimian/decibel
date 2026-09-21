@@ -5,6 +5,9 @@ unaudited and has not been declared production-ready; see the
 
 ### Added
 
+- Add `Decibel.ReplayWindow`, a pure bitmap replay helper for
+  application-owned connectionless state, with executable guidance for
+  ordered, lossy in-order, and lossy reordered transports.
 - Publish a Getting Started guide with runnable NN and IK examples, application
   framing, remote-key trust validation, and focused recipes for keys, PSKs,
   handshake payloads, channel binding, rekeying, fallback, connectionless
