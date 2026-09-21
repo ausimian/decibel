@@ -11,8 +11,9 @@ only the inbound operations shown below.
 > A recipient using `Decibel.set_nonce/3` must track every nonce that decrypted
 > successfully and reject duplicates; otherwise an attacker can replay an
 > authenticated message. An outbound nonce must never be reused with the same
-> key. Decibel deliberately exposes a low-level nonce API and does not provide
-> a replay-protected decrypt today, so the application owns this replay state.
+> key. `Decibel.ReplayWindow` provides the bookkeeping value, but the
+> application still owns, stores, and serializes it; Decibel does not hide
+> replay state in the session or provide a replay-protected decrypt operation.
 
 The sender and recipient sessions stay in their respective owner processes.
 Transfer `{nonce, ciphertext, aad}` between processes or peers, not either
@@ -28,72 +29,70 @@ ciphertext = Decibel.encrypt(sender, plaintext, aad)
 send(peer, {nonce, ciphertext})
 ```
 
-The recipient needs a bounded replay window. This example retains the latest
-64 nonce values. A nonce at the lower edge is accepted; older messages are
-rejected as stale even if they were never received, keeping memory bounded.
+Choose replay handling to match the transport:
 
+- Reliable, ordered transports use the cipher's implicit nonce progression and
+  need neither `Decibel.set_nonce/3` nor a replay window.
+- Lossy, in-order transports can retain only the highest authenticated nonce,
+  rejecting nonces at or below it and updating it only after successful
+  decryption.
+- Lossy transports that can reorder messages use `Decibel.ReplayWindow`.
+
+A replay window of size 64 retains exactly 64 nonce positions: `highest` down
+to `highest - 63`. The next value, `highest - 64`, is stale even if it was never
+received. This preserves the boundary used by the earlier bounded `MapSet`
+example while replacing its storage with a bitmap.
+
+<!-- connectionless-example:start -->
 ```elixir
-defmodule ConnectionlessReplayWindow do
+defmodule ConnectionlessExample do
   @moduledoc false
-  @size 64
-  @max_nonce 2 ** 64 - 2
-
-  def new, do: %{highest: nil, seen: MapSet.new()}
 
   def decrypt(ref, nonce, ciphertext, aad, window) do
-    :ok = validate_nonce(ref, nonce)
-
-    cond do
-      MapSet.member?(window.seen, nonce) ->
-        {:error, :duplicate, window}
-
-      stale?(window, nonce) ->
-        {:error, :stale, window}
-
-      true ->
-        :ok = Decibel.set_nonce(ref, :in, nonce)
-
-        try do
-          plaintext = Decibel.decrypt(ref, ciphertext, aad)
-          {:ok, plaintext, remember(window, nonce)}
-        rescue
-          error in Decibel.DecryptionError -> {:error, error, window}
-        end
+    with :ok <- Decibel.ReplayWindow.check(window, nonce),
+         :ok <- Decibel.set_nonce(ref, :in, nonce) do
+      try do
+        plaintext = Decibel.decrypt(ref, ciphertext, aad)
+        {:ok, plaintext, Decibel.ReplayWindow.commit(window, nonce)}
+      rescue
+        error in Decibel.DecryptionError -> {:error, error, window}
+      end
+    else
+      {:error, reason} -> {:error, reason, window}
     end
-  end
-
-  defp validate_nonce(_ref, nonce)
-       when is_integer(nonce) and nonce >= 0 and nonce <= @max_nonce,
-       do: :ok
-
-  defp validate_nonce(ref, nonce), do: Decibel.set_nonce(ref, :in, nonce)
-
-  defp stale?(%{highest: nil}, _nonce), do: false
-  defp stale?(%{highest: highest}, nonce), do: nonce <= highest - @size
-
-  defp remember(window, nonce) do
-    highest = max(window.highest || nonce, nonce)
-
-    seen =
-      window.seen
-      |> MapSet.put(nonce)
-      |> Enum.filter(&(&1 > highest - @size))
-      |> MapSet.new()
-
-    %{highest: highest, seen: seen}
   end
 end
 
-window = ConnectionlessReplayWindow.new()
-{nonce, ciphertext} = get_msg_from(peer)
+decrypt_connectionless = &ConnectionlessExample.decrypt/5
+
+sender = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :ini)
+recipient = Decibel.new("Noise_NN_25519_ChaChaPoly_BLAKE2s", :rsp)
+
+sender
+|> Decibel.handshake_encrypt()
+|> then(&Decibel.handshake_decrypt(recipient, &1))
+
+recipient
+|> Decibel.handshake_encrypt()
+|> then(&Decibel.handshake_decrypt(sender, &1))
+
+window = Decibel.ReplayWindow.new()
+nonce = Decibel.nonce(sender, :out)
+aad = <<nonce::unsigned-little-64>>
+ciphertext = Decibel.encrypt(sender, "connectionless packet", aad)
 
 {:ok, plaintext, window} =
-  ConnectionlessReplayWindow.decrypt(recipient, nonce, ciphertext, aad, window)
+  decrypt_connectionless.(recipient, nonce, ciphertext, aad, window)
 
 # A second delivery is rejected before Decibel decrypts it.
 {:error, :duplicate, ^window} =
-  ConnectionlessReplayWindow.decrypt(recipient, nonce, ciphertext, aad, window)
+  decrypt_connectionless.(recipient, nonce, ciphertext, aad, window)
+
+:ok = Decibel.close(sender)
+:ok = Decibel.close(recipient)
+plaintext
 ```
+<!-- connectionless-example:end -->
 
 The window changes only after authentication succeeds. A failed ciphertext
 therefore does not prevent a later authentic packet with the same nonce from
