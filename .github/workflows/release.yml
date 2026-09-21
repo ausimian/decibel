@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to Hex / Elixir 1.19.5 / OTP 28.3
+    runs-on: ubuntu-latest
+    env:
+      ELIXIR_VERSION: "1.19.5"
+      OTP_VERSION: "28.3"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Require a Hex API key
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        shell: bash
+        run: |
+          if [ -z "${HEX_API_KEY}" ]; then
+            echo "::error::The HEX_API_KEY repository secret is not set; cannot publish."
+            exit 1
+          fi
+
+      - name: Verify the tag matches mix.exs
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+
+          if [ -z "${version}" ]; then
+            echo "::error::Could not read @version from mix.exs."
+            exit 1
+          fi
+
+          if [ "${tag}" != "${version}" ]; then
+            echo "::error::Tag ${tag} does not match @version ${version} in mix.exs."
+            exit 1
+          fi
+
+          echo "Releasing ${version}."
+
+      # The full release gates (package manifest, Dialyzer, coverage floor) run
+      # in CI on every push to main. Requiring the tagged commit to be on main
+      # means those gates have already passed for this exact tree, so this job
+      # re-runs only the cheap checks instead of duplicating the manifest list.
+      - name: Verify the tagged commit is on main
+        shell: bash
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tagged commit ${GITHUB_SHA} is not an ancestor of origin/main."
+            exit 1
+          fi
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Restore dependencies and build cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.arch }}-release-elixir-${{ env.ELIXIR_VERSION }}-otp-${{ env.OTP_VERSION }}-mix-${{ hashFiles('mix.lock') }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Audit dependencies
+        run: mix hex.audit
+
+      - name: Run quality gates
+        run: mix precommit
+
+      - name: Build documentation
+        run: mix docs --warnings-as-errors
+
+      - name: Publish package and documentation
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish --yes
