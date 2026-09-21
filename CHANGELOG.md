@@ -2,6 +2,15 @@
 
 <!-- %% CHANGELOG_ENTRIES %% -->
 
+## 1.0.1 - 2026-09-21
+
+### Fixed
+
+- Link the README's documentation list to HexDocs and its security policy to
+  the repository. The hex.pm package page rewrites repository-relative links
+  into tarball previews, so those entries served raw markdown and the security
+  policy link returned 404.
+
 ## 1.0.0 - 2026-09-21
 
 Decibel 1.0 establishes its first stable public API, strengthens protocol-boundary
