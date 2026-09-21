@@ -5,12 +5,15 @@ defmodule Decibel.DocumentationTest do
 
   @project_root Path.expand("..", __DIR__)
   @readme_path Path.join(@project_root, "README.md")
+  @getting_started_path Path.join(@project_root, "guides/getting-started.md")
   @published_documents [
                          @readme_path,
                          Path.join(@project_root, "CHANGELOG.md"),
                          Path.join(@project_root, "RELEASE.md"),
                          Path.join(@project_root, "SECURITY.md")
-                       ] ++ Path.wildcard(Path.join(@project_root, "lib/**/*.ex"))
+                       ] ++
+                         Path.wildcard(Path.join(@project_root, "guides/**/*.md")) ++
+                         Path.wildcard(Path.join(@project_root, "lib/**/*.ex"))
   @protocol_name ~r/\bNoise_(?:[A-Za-z0-9+\/]+_){3}[A-Za-z0-9+\/]+\b/
 
   # Deliberately rejected names shown in public documentation must be listed
@@ -18,11 +21,11 @@ defmodule Decibel.DocumentationTest do
   @deliberately_invalid_protocol_names MapSet.new([])
 
   for example <- ~w(nn ik) do
-    test "README #{String.upcase(example)} quickstart is runnable" do
+    test "getting-started #{String.upcase(example)} quickstart is runnable" do
       assert {:ok, _binding} =
                unquote(example)
-               |> readme_example()
-               |> Code.eval_string([], file: @readme_path)
+               |> getting_started_example()
+               |> Code.eval_string([], file: @getting_started_path)
     end
   end
 
@@ -55,7 +58,7 @@ defmodule Decibel.DocumentationTest do
     end
   end
 
-  defp readme_example(name) do
+  defp getting_started_example(name) do
     escaped_name = Regex.escape(name)
 
     pattern =
@@ -65,7 +68,7 @@ defmodule Decibel.DocumentationTest do
         "s"
       )
 
-    %{"code" => code} = Regex.named_captures(pattern, File.read!(@readme_path))
+    %{"code" => code} = Regex.named_captures(pattern, File.read!(@getting_started_path))
     code
   end
 end

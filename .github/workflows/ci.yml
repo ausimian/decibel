@@ -137,6 +137,11 @@ jobs:
                   CHANGELOG.md \
                   LICENSE \
                   README.md \
+                  guides/connectionless-transports.md \
+                  guides/getting-started.md \
+                  guides/noise-pipes.md \
+                  guides/security.md \
+                  guides/upgrading-to-1.0.md \
                   hex_metadata.config \
                   mix.exs
               } | sort

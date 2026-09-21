@@ -16,8 +16,29 @@ defmodule Decibel.MixProject do
       source_url: @source_url,
       test_coverage: [tool: ExCoveralls],
       docs: [
-        main: "Decibel",
-        extras: ["CHANGELOG.md"],
+        main: "getting-started",
+        extras: [
+          "guides/getting-started.md",
+          "guides/security.md",
+          "guides/connectionless-transports.md",
+          "guides/noise-pipes.md",
+          "guides/upgrading-to-1.0.md",
+          "CHANGELOG.md"
+        ],
+        groups_for_extras: [
+          "Getting started": [
+            "guides/getting-started.md",
+            "guides/security.md"
+          ],
+          "Advanced guides": [
+            "guides/connectionless-transports.md",
+            "guides/noise-pipes.md"
+          ],
+          "Project information": [
+            "guides/upgrading-to-1.0.md",
+            "CHANGELOG.md"
+          ]
+        ],
         source_ref: @version,
         source_url: @source_url
       ]
@@ -58,7 +79,7 @@ defmodule Decibel.MixProject do
   defp package do
     [
       description: "An Elixir implementation of the Noise Protocol Framework.",
-      files: ~w(.formatter.exs CHANGELOG.md LICENSE README.md lib mix.exs),
+      files: ~w(.formatter.exs CHANGELOG.md LICENSE README.md guides lib mix.exs),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
