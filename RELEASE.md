@@ -1,67 +1,79 @@
+Decibel 1.0 establishes its first stable public API, strengthens protocol-boundary
+validation, and documents a safer integration contract. The project remains
+unaudited and has not been declared production-ready; see the
+[security posture](https://hexdocs.pm/decibel/Decibel.html#module-security-posture).
+
 ### Added
 
 - Add runnable NN and IK getting-started examples with application framing,
   remote-key trust validation, and focused recipes for keys, PSKs, handshake
   payloads, channel binding, rekeying, fallback, connectionless delivery,
   session cleanup, and error handling.
-- Add fixed-seed adversarial state-machine coverage for malformed and truncated
-  input, invalid call order, fragmented iodata, authentication-failure retries,
-  and nonce boundaries across the supported Noise pattern and primitive families.
-- Pin each checked-in interoperability vector to its upstream revision, licence,
-  checksums, and local transformation, with offline verification and explicit
-  regeneration commands.
-- Document the unaudited, pre-1.0 security posture and supported Noise r34
-  surface, with safe-use guidance for key and PSK handling, peer authentication,
-  protocol negotiation, framing, nonces and replay protection, rekeying, and
+- Publish the supported Noise r34 patterns, modifiers, primitives, and runtime
+  combinations, together with safe-use guidance for peer authentication, key
+  and PSK handling, negotiation, framing, replay protection, rekeying, and
   failure handling.
 - Add a security policy with private vulnerability reporting and a
   latest-release support policy.
+- Add stable, machine-readable exception contracts for peer-message failures,
+  nonce failures, discarded one-way directions, and session ownership,
+  lifetime, and phase errors. Rejected operations leave session state
+  unchanged.
 
 ### Changed
 
-- Correct handshake-hash, Diffie-Hellman keypair, and nonce types so HexDocs
-  accurately describes 32- and 64-byte hashes and the keys stored during
-  handshakes.
-- Gate releases on warning-free Dialyzer and documentation builds, an exact
-  Hex package manifest, at least 97% line coverage, and dependency retirement
-  and security-advisory audits.
-- **Breaking:** Finalize the 1.0 session API with idiomatic
-  `handshake_complete?/1`, `handshake_hash/1`, `nonce/2`, and `remote_key/1`
-  accessors. The 0.2 names remain deprecated for the 1.0 compatibility release
-  and are scheduled for removal in 2.0.
+- **Breaking:** Require Elixir `~> 1.18` instead of `~> 1.14`. **Migration:**
+  upgrade the application to Elixir 1.18 or later before updating Decibel.
+- **Breaking:** Make `handshake_complete?/1`, `handshake_hash/1`, `nonce/2`,
+  and `remote_key/1` the canonical accessors. **Migration:** rename calls from
+  `is_handshake_complete?/1`, `get_handshake_hash/1`, `get_nonce/2`, and
+  `get_remote_key/1`; the 0.2 names remain deprecated aliases until 2.0.
+- **Breaking:** Replace bare session references with opaque, owner-aware
+  handles and reject cross-process, closed, unknown, and phase-invalid use with
+  `Decibel.SessionError`. **Migration:** treat handles as opaque, drop 0.2-era
+  `is_reference/1` checks on session values, perform every operation serially
+  in the process that called `new/4`, call `close/1` when finished, and create a
+  new session after the owner exits.
 - Make the raising API contract explicit: data-producing operations return
-  their payloads directly, state-only operations return `:ok`, and rejected
+  their payload directly, state-only operations return `:ok`, and rejected
   operations raise stable exceptions without committing session state.
-- **Breaking:** Remove the unsupported custom `:registry` construction option.
-  The `:swap` option remains available for interactive fallback handshakes and
-  is now fully documented.
-- **Breaking:** Replace bare session references with owner-aware opaque handles.
-  Sessions remain local to the process that creates them, cannot be transferred
-  or used concurrently from another process, and live until closed or until
-  their owner exits. Cross-process, closed, unknown, and phase-invalid use now
-  raises `Decibel.SessionError` with stable reasons instead of leaking internal
-  match, case, or map errors.
-- **Breaking:** Reject attempts to move an outbound transport nonce backwards,
-  preventing accidental key/nonce reuse. Callers should read the next outbound
-  nonce with `nonce/2`; forward skips and inbound nonce selection remain
-  available through `set_nonce/3`.
+- **Breaking:** Enforce initiator-to-responder transport direction after the
+  one-way `N`, `K`, and `X` handshakes. **Migration:** only the initiator may
+  encrypt and only the responder may decrypt; choose an interactive pattern
+  when the application needs bidirectional transport.
+- **Breaking:** Reject attempts to move an outbound transport nonce backwards.
+  **Migration:** read the next outbound value with `nonce/2`, leave it unchanged
+  or move it forward only, and keep application-owned replay state when
+  selecting inbound nonces with `set_nonce/3`.
+- **Breaking:** Generate a fresh local ephemeral keypair for every ordinary
+  handshake and reject caller-supplied ephemeral keys outside fallback
+  pre-messages. **Migration:** omit `:e` and `:re` for ordinary handshakes and
+  supply them only for their role-specific fallback pre-message within the
+  same Noise Pipes run.
+- **Breaking:** Enforce Noise's 65,535-byte limit for handshake and transport
+  messages. Transport plaintexts are limited to 65,519 bytes to leave room for
+  the authentication tag. **Migration:** split larger logical messages and
+  preserve and authenticate Noise message boundaries in application framing.
 - Make connectionless replay protection explicitly application-owned, with a
   bounded replay-window example that records nonces only after successful
   authentication and guidance for coordinated rekeying.
-- **Breaking:** Generate a fresh local ephemeral keypair for every ordinary
-  handshake and reject caller-supplied `:e` keypairs outside fallback
-  pre-messages, preventing accidental transport-key and nonce reuse across
-  sessions.
-- **Breaking:** Enforce Noise's 65,535-byte limit for handshake and transport
-  messages. Transport plaintexts are now limited to 65,519 bytes to leave room
-  for the authentication tag; applications must split and frame larger logical
-  messages before passing them to Decibel.
+- Correct handshake-hash, Diffie-Hellman keypair, and nonce types so HexDocs
+  accurately describes 32- and 64-byte hashes, stored keypairs, usable nonce
+  bounds, and the reserved exhaustion value.
+
+### Removed
+
+- **Breaking:** Remove the unsupported custom `:registry` construction option.
+  **Migration:** select a supported Noise r34 pattern from Decibel's built-in
+  registry; `:swap` remains available for interactive fallback handshakes.
 
 ### Fixed
 
-- Validate all role-specific static key material, prologue data, and
-  construction options during session creation, raising stable field-level
-  errors before storing session state.
+- Validate all role-specific static key material, fallback ephemerals, prologue
+  data, and construction options during session creation, raising stable
+  field-level errors before storing session state. Configurations that
+  previously failed later must now provide exactly the key material required by
+  the selected role and fully modified pattern.
 - Reject malformed or non-canonical Noise protocol names, invalid modifier
   placements, and missing, malformed, or unused pre-shared keys during session
   creation instead of silently omitting PSK authentication.
@@ -69,8 +81,6 @@
   unauthenticated, or invalid-key peer messages, preserving processed remote
   keys and leaving session state unchanged.
 - Allow Noise's final usable transport nonce (`2^64 - 2`) once, then raise
-  `Decibel.NonceError` on exhaustion; `set_nonce/3` now rejects reserved and
-  out-of-range nonce values without changing session state.
-- Prevent responders from encrypting and initiators from decrypting transport
-  messages after `N`, `K`, and `X` one-way handshakes. Operations targeting the
-  discarded transport direction now raise `Decibel.TransportDirectionError`.
+  `Decibel.NonceError` on exhaustion; `set_nonce/3` now rejects reserved,
+  negative, non-integer, and oversized nonce values without changing session
+  state.

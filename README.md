@@ -18,8 +18,8 @@ The test suite includes known-answer vectors from
 [Snow](https://github.com/mcginty/snow), and
 [noise-c](https://github.com/rweather/noise-c). These are interoperability
 evidence, not a security audit. Decibel has not received an independent security
-audit or formal verification, is still pre-1.0, and has not been declared
-production-ready. The package requires Elixir `~> 1.18` and uses Erlang/OTP's
+audit or formal verification and has not been declared production-ready. The
+package requires Elixir `~> 1.18` and uses Erlang/OTP's
 `:crypto` implementation rather than a pluggable crypto backend.
 
 ## Safe use
@@ -64,7 +64,7 @@ The package can be installed by adding `decibel` to your list of dependencies in
 ```elixir
 def deps do
   [
-    {:decibel, "~> 0.2.0"}
+    {:decibel, "~> 1.0"}
   ]
 end
 ```
