@@ -52,7 +52,7 @@ defmodule Decibel do
   > #### Security review and production use {: .warning}
   >
   > Decibel has not received an independent security audit or formal
-  > verification. It is pre-1.0 and has not been declared production-ready.
+  > verification and has not been declared production-ready.
   > Applications considering production use must review Decibel and their
   > complete protocol, key management, failure policy, and deployment against
   > their own threat model.
