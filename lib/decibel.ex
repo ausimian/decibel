@@ -168,6 +168,11 @@ defmodule Decibel do
   hash, a nonce, or a remote key. Operations whose only result is a state change
   return `:ok`: `close/1`, `rekey/2`, and `set_nonce/3`.
 
+  Plaintext, associated data, and inbound Noise messages accept iodata. The
+  message and payload return types are also iodata, so callers that need a
+  binary for framing or transport I/O should use `IO.iodata_to_binary/1` rather
+  than depend on an incidental list or binary shape.
+
   There are no bang and non-bang variants. Invalid construction and arguments
   raise `ArgumentError`; peer-message failures raise
   `Decibel.DecryptionError`; nonce and one-way direction failures raise
@@ -196,7 +201,8 @@ defmodule Decibel do
 
   ## Example
 
-  Consider the following handshake defined in the Noise Protocol:
+  Consider the unauthenticated NN handshake defined in the Noise Protocol:
+
   ```text
   NN:
     -> e
@@ -204,41 +210,24 @@ defmodule Decibel do
   ```
 
   The parties agree on this handshake and its cryptographic parameters and
-  express this in a _protocol name_, e.g. `Noise_NN_25519_AESGCM_SHA256`. The
-  _initiator's_ code may look something like this:
+  express this in a protocol name. This runnable example drives both roles in
+  one process; a real peer process must create and operate its own session and
+  exchange framed Noise messages rather than handles.
 
-  ```elixir
-  # Create the protocol instance
-  ini = Decibel.new("Noise_NN_25519_AESGCM_SHA256", :ini)
-  # Perform the first stage of the handshake
-  msg1 = Decibel.handshake_encrypt(ini)
-  # Somehow send this message to the responder and get the response
-  magically_send_msg(rsp_proc, msg1)
-  msg2 = magically_recv_msg(rsp_proc)
-  # Process the response through the second stage
-  Decibel.handshake_decrypt(ini, msg2)
-  # At this point, the 'NN' handshake has completed for the initiator
-  # and regular messages may be sent and received
-  msg3 = Decibel.encrypt(ini, "Hello, world")
-  magically_send_msg(rsp_proc, msg3)
-  ```
-  The _responder's_ code may look something like this:
+      iex> initiator = Decibel.new("Noise_NN_25519_AESGCM_SHA256", :ini)
+      iex> responder = Decibel.new("Noise_NN_25519_AESGCM_SHA256", :rsp)
+      iex> Decibel.handshake_encrypt(initiator) |> then(&Decibel.handshake_decrypt(responder, &1))
+      ""
+      iex> Decibel.handshake_encrypt(responder) |> then(&Decibel.handshake_decrypt(initiator, &1))
+      ""
+      iex> ciphertext = Decibel.encrypt(initiator, "Hello, world")
+      iex> Decibel.decrypt(responder, ciphertext)
+      "Hello, world"
+      iex> {Decibel.close(initiator), Decibel.close(responder)}
+      {:ok, :ok}
 
-  ```elixir
-  # Create the protocol instance
-  rsp = Decibel.new("Noise_NN_25519_AESGCM_SHA256", :rsp)
-  # Receive the first-stage message from the initiator
-  msg1 = magically_recv_msg(ini_proc)
-  # Process the message through the protocol
-  Decibel.handshake_decrypt(rsp, msg1)
-  # Send the second stage to the initiator
-  msg2 = Decibel.handshake_encrypt(rsp)
-  magically_send_msg(ini_proc, msg2)
-  # At this point, the 'NN' handshake has completed for the responder
-  # and regular messages may be sent and received
-  msg3 = magically_recv_msg(ini_proc)
-  "Hello, world" = Decibel.decrypt(rsp, msg3)
-  ```
+  The repository README adds authenticated key validation, application framing,
+  the exact message-size boundary, and focused usage recipes.
 
   ## Lifecycle
 
@@ -373,7 +362,7 @@ defmodule Decibel do
 
   The following example shows a responder handling the decryption failure, and then
   transitioning to the fallback protocol, using the remote ephemeral key, via
-  `Noise_XXfallback_25519_ChaChaPoly_Blake2b`.
+  `Noise_XXfallback_25519_ChaChaPoly_BLAKE2b`.
 
   ```elixir
   # Process IK handshake message sent by the initiator

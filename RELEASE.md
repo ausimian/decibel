@@ -1,5 +1,9 @@
 ### Added
 
+- Add runnable NN and IK getting-started examples with application framing,
+  remote-key trust validation, and focused recipes for keys, PSKs, handshake
+  payloads, channel binding, rekeying, fallback, connectionless delivery,
+  session cleanup, and error handling.
 - Add fixed-seed adversarial state-machine coverage for malformed and truncated
   input, invalid call order, fragmented iodata, authentication-failure retries,
   and nonce boundaries across the supported Noise pattern and primitive families.
