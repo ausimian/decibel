@@ -1,14 +1,15 @@
 Decibel 1.0 establishes its first stable public API, strengthens protocol-boundary
 validation, and documents a safer integration contract. The project remains
 unaudited and has not been declared production-ready; see the
-[security posture](https://hexdocs.pm/decibel/Decibel.html#module-security-posture).
+[security posture](https://hexdocs.pm/decibel/security.html#security-posture).
 
 ### Added
 
-- Add runnable NN and IK getting-started examples with application framing,
-  remote-key trust validation, and focused recipes for keys, PSKs, handshake
-  payloads, channel binding, rekeying, fallback, connectionless delivery,
-  session cleanup, and error handling.
+- Publish a Getting Started guide with runnable NN and IK examples, application
+  framing, remote-key trust validation, and focused recipes for keys, PSKs,
+  handshake payloads, channel binding, rekeying, fallback, connectionless
+  delivery, session cleanup, and error handling, alongside dedicated security,
+  Noise Pipes, connectionless transport, and 1.0 upgrade guides.
 - Publish the supported Noise r34 patterns, modifiers, primitives, and runtime
   combinations, together with safe-use guidance for peer authentication, key
   and PSK handling, negotiation, framing, replay protection, rekeying, and
