@@ -5,17 +5,18 @@ Decibel is an Elixir implementation of the
 
 Decibel has not received an independent security audit or formal verification
 and has not been declared production-ready. Review the complete
-[security guidance](guides/security.md) before integrating it.
+[security guidance](https://hexdocs.pm/decibel/security.html) before
+integrating it.
 
 ## Documentation
 
-- [Getting Started](guides/getting-started.md)
-- [Security](guides/security.md)
-- [Connectionless Transports](guides/connectionless-transports.md)
-- [Noise Pipes](guides/noise-pipes.md)
-- [Upgrading to Decibel 1.0](guides/upgrading-to-1.0.md)
-- [Changelog](CHANGELOG.md)
-- [Security Policy](SECURITY.md)
+- [Getting Started](https://hexdocs.pm/decibel/getting-started.html)
+- [Security](https://hexdocs.pm/decibel/security.html)
+- [Connectionless Transports](https://hexdocs.pm/decibel/connectionless-transports.html)
+- [Noise Pipes](https://hexdocs.pm/decibel/noise-pipes.html)
+- [Upgrading to Decibel 1.0](https://hexdocs.pm/decibel/upgrading-to-1-0.html)
+- [Changelog](https://hexdocs.pm/decibel/changelog.html)
+- [Security Policy](https://github.com/ausimian/decibel/blob/main/SECURITY.md)
 
 ## Development
 
