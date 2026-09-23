@@ -10,6 +10,8 @@ defmodule Decibel.SessionError do
     `"Session is owned by another process"`.
   - `:closed` means the owner tried to use a session it has already closed. Its
     exact message is `"Session is closed"`.
+  - `:already_handed_off` means an accepted handshake cannot be handed off
+    again. Its exact message is `"Session was already handed off"`.
   - `:unknown` means the value is not a known owner-local session handle.
     Legacy bare references from Decibel 0.2, malformed values, and well-shaped
     owner-local handles without stored state use this reason. Its exact message
@@ -37,10 +39,10 @@ defmodule Decibel.SessionError do
   """
 
   @typedoc "The phase or handshake turn of a live session."
-  @type phase :: :handshake_write | :handshake_read | :transport
+  @type phase :: :handshake_write | :handshake_read | :handshake | :transport
 
   @typedoc "The reason a session operation was rejected."
-  @type reason :: :not_owner | :closed | :unknown | :wrong_phase
+  @type reason :: :not_owner | :closed | :already_handed_off | :unknown | :wrong_phase
 
   defexception [:reason, :operation, :expected_phase, :actual_phase, :message]
 
@@ -72,6 +74,7 @@ defmodule Decibel.SessionError do
 
   defp message(:not_owner, nil, nil, nil), do: "Session is owned by another process"
   defp message(:closed, nil, nil, nil), do: "Session is closed"
+  defp message(:already_handed_off, nil, nil, nil), do: "Session was already handed off"
   defp message(:unknown, nil, nil, nil), do: "Unknown Decibel session"
 
   defp message(:wrong_phase, operation, expected_phase, actual_phase) do

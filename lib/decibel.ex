@@ -27,8 +27,9 @@ defmodule Decibel do
   There are no bang and non-bang variants. Invalid construction and arguments
   raise `ArgumentError`; peer-message failures raise
   `Decibel.DecryptionError`; nonce and one-way direction failures raise
-  `Decibel.NonceError` and `Decibel.TransportDirectionError`; and ownership,
-  lifetime, or phase failures raise `Decibel.SessionError`. Applications should
+  `Decibel.NonceError` and `Decibel.TransportDirectionError`; ownership,
+  lifetime, or phase failures raise `Decibel.SessionError`; and handoff ticket
+  failures raise `Decibel.HandoffError`. Applications should
   rescue these stable exceptions only at boundaries where they have an explicit
   recovery or failure policy. Rejected operations do not commit session state.
 
@@ -92,14 +93,23 @@ defmodule Decibel do
 
   Every operation on a session must run serially in its owner process. Do not
   pass the handle to a task, worker, or peer process, and do not call it
-  concurrently. Pass Noise messages and application data between processes
-  instead. A `GenServer` or similar long-lived process can own a session and
-  serialize all operations in its callbacks. If that process terminates, its
-  supervisor must establish a new session; the old one cannot be recovered or
-  transferred.
+  concurrently. A `GenServer` or similar long-lived process can own a session
+  and serialize all operations in its callbacks. If that process terminates,
+  its supervisor must establish a new session. The sole exception is an
+  explicit, one-time handoff while the handshake is still in progress.
 
-  Decibel does not support session ownership transfer. Using a structurally
-  valid handle in another process raises `Decibel.SessionError` with
+  `handoff/2` returns a ticket to the current owner, which must deliver it to
+  the designated local target process through its own messaging protocol. The
+  target calls `accept_handoff/1` in that process and receives a new handle.
+  The old handle is closed as soon as `handoff/2` succeeds. A ticket can be
+  accepted once, and the accepted session cannot be handed off again. An
+  unclaimed ticket expires after 60 seconds and is discarded if the target
+  exits. An abandoned or failed transfer cannot restore the old handle. A
+  target that exits after accepting also discards the session state it owns.
+  Handoff is unavailable once transport begins; applications must transfer
+  their own peer configuration, socket, and replay bookkeeping separately.
+
+  Using a structurally valid handle in another process raises `Decibel.SessionError` with
   `reason: :not_owner`, including when the owner has closed it or exited. This
   classification uses the handle's owner PID alone by design; Decibel has no
   handle registry, issuance proof, or signature. A legacy bare reference,
@@ -218,7 +228,10 @@ defmodule Decibel do
   @typedoc "An opaque, process-owned Noise session handle."
   @type session :: Decibel.Session.t()
 
-  alias Decibel.{ChannelPair, Handshake, Session}
+  @typedoc "An opaque, single-use ticket for transferring an in-progress handshake."
+  @type handoff_ticket :: Decibel.Handoff.t()
+
+  alias Decibel.{ChannelPair, Handoff, Handshake, Session}
 
   @max_message_size 65_535
   @max_transport_plaintext_size @max_message_size - 16
@@ -290,6 +303,45 @@ defmodule Decibel do
     hs = Handshake.initialize(protocol_name, role, keys, opts, :safe)
     Session.create(hs)
   end
+
+  @doc """
+  Transfer an in-progress handshake to a live local process.
+
+  Returns an opaque ticket. The current owner must deliver it to `target` through
+  its own messaging protocol; this function sends no application message. The
+  old handle is closed immediately on success and cannot be used or handed off
+  again. Only `target` can call `accept_handoff/1` with the ticket. If the
+  target exits or does not accept within 60 seconds, the cryptographic state is
+  discarded. A failed call leaves the current session intact.
+
+  Invalid ownership, closed or unknown handles, and transport-phase handoff
+  raise `Decibel.SessionError`. A second handoff raises it with
+  `reason: :already_handed_off`. An invalid, dead, or remote target raises
+  `Decibel.HandoffError` with `reason: :invalid_target`.
+
+      ticket = Decibel.handoff(session, peer_pid)
+      GenServer.call(peer_pid, {:accept_noise_handshake, ticket, metadata})
+
+  The target process should call `accept_handoff/1` in its callback.
+  """
+  @spec handoff(session(), pid()) :: handoff_ticket()
+  def handoff(session, target), do: Session.handoff!(session, target)
+
+  @doc """
+  Accept a one-time handshake handoff in its designated target process.
+
+  Returns a new session handle owned by the caller, containing the same live
+  Noise handshake state and pending turn. The ticket cannot be claimed again.
+  An invalid ticket raises `Decibel.HandoffError` with `reason: :invalid_ticket`;
+  a valid ticket used by another process uses `:not_target`; and an already
+  claimed, expired, or abandoned ticket uses `:unavailable`. A stalled ticket
+  process uses `:timeout` without claiming that its state was discarded.
+
+      # In peer_pid's GenServer.handle_call/3:
+      session = Decibel.accept_handoff(ticket)
+  """
+  @spec accept_handoff(handoff_ticket()) :: session()
+  def accept_handoff(ticket), do: ticket |> Handoff.accept!() |> Session.create_accepted()
 
   @doc """
   Encrypt an outbound handshake message, optionally folding in application data.

@@ -2,8 +2,10 @@ defmodule Decibel.Session do
   @moduledoc """
   An opaque, process-owned Decibel session handle.
 
-  Session handles may only be used by the process that created them and cannot
-  be transferred. Calls from another process raise `Decibel.SessionError` with
+  Session handles may only be used by their owner process. An in-progress
+  handshake may be transferred once with `Decibel.handoff/2` and
+  `Decibel.accept_handoff/1`; acceptance creates a new handle for the target.
+  Calls from another process raise `Decibel.SessionError` with
   `reason: :not_owner`, even after the owner closes the session or exits.
   Session state lives until `Decibel.close/1` is called or the owner process
   exits, and the owner's operations on a closed handle use `reason: :closed`.
@@ -18,6 +20,7 @@ defmodule Decibel.Session do
 
   @closed :closed
   @missing :missing
+  @accepted :accepted
 
   @enforce_keys [:owner, :id]
   defstruct [:owner, :id]
@@ -30,8 +33,18 @@ defmodule Decibel.Session do
   @doc false
   @spec create(state()) :: t()
   def create(state) do
+    create_entry(state)
+  end
+
+  @doc false
+  @spec create_accepted(Handshake.t()) :: t()
+  def create_accepted(state) do
+    create_entry({@accepted, state})
+  end
+
+  defp create_entry(entry) do
     session = %__MODULE__{owner: self(), id: make_ref()}
-    Process.put(storage_key(session), state)
+    Process.put(storage_key(session), entry)
     session
   end
 
@@ -51,7 +64,13 @@ defmodule Decibel.Session do
   @doc false
   @spec store!(t(), state()) :: state()
   def store!(%__MODULE__{owner: owner} = session, state) when owner == self() do
-    Process.put(storage_key(session), state)
+    entry =
+      case Process.get(storage_key(session), @missing) do
+        {@accepted, _previous_state} -> {@accepted, state}
+        _other -> state
+      end
+
+    Process.put(storage_key(session), entry)
     state
   end
 
@@ -62,6 +81,22 @@ defmodule Decibel.Session do
     _state = validated |> fetch_state!() |> validate_phase!(:close, :any)
     Process.put(storage_key(validated), @closed)
     :ok
+  end
+
+  @doc false
+  @spec handoff!(term(), pid()) :: Decibel.Handoff.t()
+  def handoff!(session, target) do
+    {validated, state} = fetch!(session, :handoff, :any)
+
+    if match?({@accepted, _state}, Process.get(storage_key(validated), @missing)) do
+      raise SessionError, reason: :already_handed_off
+    end
+
+    validate_phase!(state, :handoff, :handshake)
+    Decibel.Handoff.validate_target!(target)
+    ticket = Decibel.Handoff.create(state, target)
+    Process.put(storage_key(validated), @closed)
+    ticket
   end
 
   defp validate_handle!(%__MODULE__{owner: owner, id: id} = session)
@@ -84,11 +119,15 @@ defmodule Decibel.Session do
       @closed -> raise SessionError, reason: :closed
       %Handshake{} = state -> state
       %ChannelPair{} = state -> state
+      {@accepted, %Handshake{} = state} -> state
+      {@accepted, %ChannelPair{} = state} -> state
       _invalid_state -> raise SessionError, reason: :unknown
     end
   end
 
   defp validate_phase!(state, _operation, :any), do: state
+
+  defp validate_phase!(%Handshake{} = state, _operation, :handshake), do: state
 
   defp validate_phase!(state, operation, expected_phase) do
     actual_phase = phase(state)
