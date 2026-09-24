@@ -2,6 +2,12 @@
 
 <!-- %% CHANGELOG_ENTRIES %% -->
 
+## 1.1.0 - 2026-09-24
+
+### Added
+
+- Add one-time handoff of in-progress Noise handshakes to a designated local process.
+
 ## 1.0.1 - 2026-09-21
 
 ### Fixed
