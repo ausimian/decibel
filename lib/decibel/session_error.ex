@@ -14,8 +14,8 @@ defmodule Decibel.SessionError do
     again. Its exact message is `"Session was already handed off"`.
   - `:unknown` means the value is not a known owner-local session handle.
     Legacy bare references from Decibel 0.2, malformed values, and well-shaped
-    owner-local handles without stored state use this reason. Its exact message
-    is `"Unknown Decibel session"`.
+    owner-local handles that Decibel did not issue use this reason. Its exact
+    message is `"Unknown Decibel session"`.
   - `:wrong_phase` means the session is live, but the operation is not valid for
     the current handshake turn or transport phase. Its exact message is
     `"Session operation <operation> requires <expected_phase> phase; current
@@ -31,7 +31,9 @@ defmodule Decibel.SessionError do
 
   This owner-PID-only classification is deliberate. Session handles are opaque
   and must not be constructed or altered by callers. Decibel intentionally has
-  no handle registry, issuance proof, signature, or global verification state.
+  no handle registry, issuance proof, signature, or global verification state,
+  so a constructed or altered owner-local handle may report `:closed` rather
+  than `:unknown`.
 
   For `:wrong_phase`, `:operation`, `:expected_phase`, and `:actual_phase`
   identify the rejected transition. Those fields are `nil` for all other

@@ -88,8 +88,11 @@ defmodule Decibel do
 
   `new/4` returns an opaque `t:session/0` handle. The session state belongs to
   the process that calls `new/4` and is stored in that process until `close/1`
-  is called or the owner process exits. A handle contains no cryptographic state
-  and must not be inspected, altered, or constructed by callers.
+  is called or the owner process exits. Closing or handing off a session
+  removes everything Decibel stored for it, so a long-lived owner does not
+  accumulate storage for sessions it no longer holds. A handle contains no
+  cryptographic state and must not be inspected, altered, or constructed by
+  callers.
 
   Every operation on a session must run serially in its owner process. Do not
   pass the handle to a task, worker, or peer process, and do not call it
@@ -550,8 +553,9 @@ defmodule Decibel do
   Returns `:ok` after discarding the session state.
 
   This discards handshake or transport state immediately, including pending key
-  material. The state is also released automatically when the owner process
-  terminates. The handle remains closed and cannot be reused.
+  material, and removes the session's storage from the owner process. The state
+  is also released automatically when the owner process terminates. The handle
+  remains closed and cannot be reused.
 
   Invalid ownership or an unknown handle raises `Decibel.SessionError`. Calling
   `close/1` again raises it with `reason: :closed`.
