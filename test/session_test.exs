@@ -51,15 +51,17 @@ defmodule Decibel.SessionTest do
     end
   end
 
-  test "legacy, malformed, and absent owner-local handles are unknown" do
+  test "legacy, malformed, and never-issued owner-local handles are unknown" do
     malformed_session = struct(Session, owner: :not_a_pid, id: make_ref())
 
     unknown_values = [
       make_ref(),
       :not_a_session,
-      %{owner: self(), id: make_ref()},
+      %{owner: self(), id: make_ref(), seq: 0},
       malformed_session,
-      struct!(Session, owner: self(), id: make_ref())
+      struct(Session, owner: self(), id: make_ref()),
+      struct!(Session, owner: self(), id: make_ref(), seq: -1),
+      struct!(Session, owner: self(), id: make_ref(), seq: :not_a_sequence)
     ]
 
     for unknown <- unknown_values,
@@ -68,9 +70,23 @@ defmodule Decibel.SessionTest do
     end
   end
 
+  test "a never-issued handle stays unknown after its owner closes sessions" do
+    closed = Decibel.new(@nn_protocol, :ini)
+    assert :ok == Decibel.close(closed)
+    never_issued = struct!(Session, owner: self(), id: make_ref(), seq: closed.seq + 1)
+
+    for {_operation, call} <- all_operations(never_issued) do
+      assert_session_error(call, :unknown, "Unknown Decibel session")
+    end
+
+    for {_operation, call} <- all_operations(closed) do
+      assert_session_error(call, :closed, "Session is closed")
+    end
+  end
+
   test "a well-shaped foreign-looking handle is classified only by its owner PID" do
     owner = spawn(fn -> receive do: (:stop -> :ok) end)
-    handle = struct!(Session, owner: owner, id: make_ref())
+    handle = struct!(Session, owner: owner, id: make_ref(), seq: 0)
 
     for {_operation, call} <- all_operations(handle) do
       assert_session_error(call, :not_owner, "Session is owned by another process")
@@ -79,7 +95,7 @@ defmodule Decibel.SessionTest do
     send(owner, :stop)
   end
 
-  test "closing a handshake discards state and leaves only a small marker" do
+  test "closing a handshake discards state and removes its owner entry" do
     static = :crypto.generate_key(:ecdh, :x25519)
     psk = :crypto.strong_rand_bytes(32)
 
@@ -90,22 +106,70 @@ defmodule Decibel.SessionTest do
         %{s: static, psks: [psk]}
       )
 
-    assert Map.keys(session) |> Enum.sort() == [:__struct__, :id, :owner]
+    assert Map.keys(session) |> Enum.sort() == [:__struct__, :id, :owner, :seq]
     assert inspect(session) =~ "#Decibel.Session<owner:"
     refute inspect(session) =~ "#Reference"
+    assert [{{Session, _id}, _state}] = session_entries()
 
     assert :ok == Decibel.close(session)
 
-    assert [{{Session, _id}, :closed}] = session_entries()
+    assert [] == session_entries()
 
     for {_operation, call} <- all_operations(session) do
       assert_session_error(call, :closed, "Session is closed")
     end
 
-    assert [{{Session, _id}, :closed}] = session_entries()
+    assert [] == session_entries()
 
     task = Task.async(fn -> capture_session_error(fn -> Decibel.close(session) end) end)
     assert %SessionError{reason: :not_owner} = Task.await(task)
+  end
+
+  test "closed sessions leave only one counter in the owner's dictionary" do
+    baseline = Process.get_keys()
+
+    closed =
+      Enum.flat_map(1..200, fn _index ->
+        handshake = Decibel.new(@nn_protocol, :ini)
+        {initiator, responder} = establish_nn(@nn_protocol)
+        sessions = [handshake, initiator, responder]
+
+        for session <- sessions, do: assert(:ok == Decibel.close(session))
+        sessions
+      end)
+
+    assert [] == session_entries()
+    assert [_counter] = Process.get_keys() -- baseline
+
+    for session <- closed do
+      assert_session_error(fn -> Decibel.close(session) end, :closed, "Session is closed")
+    end
+
+    assert [_counter] = Process.get_keys() -- baseline
+  end
+
+  test "handles never share state when the owner's issue counter is lost" do
+    baseline = Process.get_keys()
+    first = Decibel.new(@nn_protocol, :ini)
+    session_keys = Enum.map(session_entries(), &elem(&1, 0))
+    [counter_key] = (Process.get_keys() -- baseline) -- session_keys
+
+    Process.delete(counter_key)
+    second = Decibel.new(@nn_protocol, :ini)
+    Process.put(counter_key, :not_a_count)
+    third = Decibel.new(@nn_protocol, :ini)
+
+    assert Enum.map([first, second, third], & &1.seq) == [0, 0, 0]
+    assert IO.iodata_length(Decibel.handshake_encrypt(first)) == 32
+    assert :ok == Decibel.close(first)
+    assert_session_error(fn -> Decibel.close(first) end, :closed, "Session is closed")
+
+    for session <- [second, third] do
+      assert IO.iodata_length(Decibel.handshake_encrypt(session)) == 32
+      assert :ok == Decibel.close(session)
+    end
+
+    assert [] == session_entries()
   end
 
   test "closing a transport session rejects every later operation" do
@@ -471,7 +535,7 @@ defmodule Decibel.SessionTest do
 
   defp session_entries do
     Enum.filter(Process.get(), fn
-      {{Session, _id}, _value} -> true
+      {{Session, id}, _value} when is_reference(id) -> true
       {_key, _value} -> false
     end)
   end

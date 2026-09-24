@@ -49,19 +49,27 @@ defmodule Decibel.HandoffTest do
     def handle_call({:decrypt, ciphertext}, _from, session) do
       {:reply, Decibel.decrypt(session, ciphertext), session}
     end
+
+    def handle_call({:run, fun}, _from, session) do
+      {:reply, fun.(session), session}
+    end
   end
 
   test "the target continues the same authenticated handshake and owns transport" do
     {initiator, responder, initiator_public} = begin_handshake()
     {:ok, peer} = Peer.start_link()
+    peer_baseline = dictionary_keys(peer)
+    source_keys = Process.get_keys()
 
     ticket = Decibel.handoff(responder, peer)
     assert inspect(ticket) == "#Decibel.Handoff<opaque>"
     assert Map.keys(ticket) |> Enum.sort() == [:__struct__, :secret, :server]
 
+    assert [_responder_entry] = source_keys -- Process.get_keys()
+    assert [] == Process.get_keys() -- source_keys
     assert_handoff_error(fn -> Decibel.accept_handoff(ticket) end, :not_target)
-    assert_session_error(fn -> Decibel.handshake_encrypt(responder) end, :closed)
-    assert_session_error(fn -> Decibel.remote_key(responder) end, :closed)
+    assert_all_closed(owner_operation_reasons(responder))
+    assert [_responder_entry] = source_keys -- Process.get_keys()
 
     assert {:ok, target_session, ^initiator_public} = GenServer.call(peer, {:accept, ticket})
     assert target_session.owner == peer
@@ -80,6 +88,11 @@ defmodule Decibel.HandoffTest do
 
     ciphertext = Decibel.encrypt(initiator, "after handoff")
     assert "after handoff" == GenServer.call(peer, {:decrypt, ciphertext})
+
+    assert :ok == GenServer.call(peer, {:run, &Decibel.close/1})
+    assert [_counter] = dictionary_keys(peer) -- peer_baseline
+    assert_all_closed(GenServer.call(peer, {:run, &owner_operation_reasons/1}))
+    assert [_counter] = dictionary_keys(peer) -- peer_baseline
 
     Decibel.close(initiator)
     GenServer.stop(peer)
@@ -199,5 +212,39 @@ defmodule Decibel.HandoffTest do
     call.()
   rescue
     error in SessionError -> error
+  end
+
+  # Runs in the session's owner, which may be the Peer process.
+  defp owner_operation_reasons(session) do
+    [
+      close: fn -> Decibel.close(session) end,
+      handoff: fn -> Decibel.handoff(session, self()) end,
+      handshake_encrypt: fn -> Decibel.handshake_encrypt(session) end,
+      handshake_decrypt: fn -> Decibel.handshake_decrypt(session, <<>>) end,
+      handshake_complete?: fn -> Decibel.handshake_complete?(session) end,
+      handshake_hash: fn -> Decibel.handshake_hash(session) end,
+      encrypt: fn -> Decibel.encrypt(session, "plaintext") end,
+      decrypt: fn -> Decibel.decrypt(session, <<>>) end,
+      rekey: fn -> Decibel.rekey(session, :out) end,
+      nonce: fn -> Decibel.nonce(session, :out) end,
+      set_nonce: fn -> Decibel.set_nonce(session, :out, 0) end,
+      remote_key: fn -> Decibel.remote_key(session) end
+    ]
+    |> Map.new(fn {operation, call} ->
+      case capture_session_error(call) do
+        %SessionError{reason: reason} -> {operation, reason}
+        result -> {operation, {:returned, result}}
+      end
+    end)
+  end
+
+  defp assert_all_closed(reasons) do
+    assert map_size(reasons) == 12
+    assert reasons == Map.new(reasons, fn {operation, _reason} -> {operation, :closed} end)
+  end
+
+  defp dictionary_keys(pid) do
+    {:dictionary, dictionary} = Process.info(pid, :dictionary)
+    Enum.map(dictionary, &elem(&1, 0))
   end
 end

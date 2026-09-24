@@ -18,14 +18,14 @@ defmodule Decibel.Session do
 
   alias Decibel.{ChannelPair, Handshake, SessionError}
 
-  @closed :closed
   @missing :missing
   @accepted :accepted
+  @sequence_key {__MODULE__, :sequence}
 
-  @enforce_keys [:owner, :id]
-  defstruct [:owner, :id]
+  @enforce_keys [:owner, :id, :seq]
+  defstruct [:owner, :id, :seq]
 
-  @opaque t :: %__MODULE__{owner: pid(), id: reference()}
+  @opaque t :: %__MODULE__{owner: pid(), id: reference(), seq: non_neg_integer()}
 
   @type phase :: SessionError.phase()
   @typep state :: Handshake.t() | ChannelPair.t()
@@ -43,9 +43,28 @@ defmodule Decibel.Session do
   end
 
   defp create_entry(entry) do
-    session = %__MODULE__{owner: self(), id: make_ref()}
+    session = %__MODULE__{owner: self(), id: make_ref(), seq: next_sequence()}
     Process.put(storage_key(session), entry)
     session
+  end
+
+  # Closing deletes a session's entry, so a missing entry alone cannot tell a
+  # closed handle from one Decibel never issued. Each handle therefore carries
+  # its owner's issue sequence number, and the owner keeps one counter of
+  # handles issued so far. Storage stays keyed by the unique reference, so a
+  # lost or reset counter can only change the reported reason; it can never
+  # let one handle reach another session's state.
+  defp next_sequence do
+    sequence = issued_count()
+    Process.put(@sequence_key, sequence + 1)
+    sequence
+  end
+
+  defp issued_count do
+    case Process.get(@sequence_key) do
+      count when is_integer(count) and count >= 0 -> count
+      _missing_or_invalid -> 0
+    end
   end
 
   @doc false
@@ -79,7 +98,7 @@ defmodule Decibel.Session do
   def close!(session) do
     validated = validate_handle!(session)
     _state = validated |> fetch_state!() |> validate_phase!(:close, :any)
-    Process.put(storage_key(validated), @closed)
+    Process.delete(storage_key(validated))
     :ok
   end
 
@@ -95,7 +114,7 @@ defmodule Decibel.Session do
     validate_phase!(state, :handoff, :handshake)
     Decibel.Handoff.validate_target!(target)
     ticket = Decibel.Handoff.create(state, target)
-    Process.put(storage_key(validated), @closed)
+    Process.delete(storage_key(validated))
     ticket
   end
 
@@ -115,8 +134,7 @@ defmodule Decibel.Session do
 
   defp fetch_state!(session) do
     case Process.get(storage_key(session), @missing) do
-      @missing -> raise SessionError, reason: :unknown
-      @closed -> raise SessionError, reason: :closed
+      @missing -> raise SessionError, reason: missing_reason(session)
       %Handshake{} = state -> state
       %ChannelPair{} = state -> state
       {@accepted, %Handshake{} = state} -> state
@@ -124,6 +142,13 @@ defmodule Decibel.Session do
       _invalid_state -> raise SessionError, reason: :unknown
     end
   end
+
+  # An owner-local handle with no entry was closed if its owner issued it.
+  defp missing_reason(%__MODULE__{seq: sequence}) when is_integer(sequence) and sequence >= 0 do
+    if sequence < issued_count(), do: :closed, else: :unknown
+  end
+
+  defp missing_reason(_session), do: :unknown
 
   defp validate_phase!(state, _operation, :any), do: state
 
