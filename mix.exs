@@ -1,7 +1,7 @@
 defmodule Decibel.MixProject do
   use Mix.Project
 
-  @version "1.0.1"
+  @version "1.1.0"
   @source_url "https://github.com/ausimian/decibel"
 
   def project do
