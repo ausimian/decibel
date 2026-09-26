@@ -172,8 +172,8 @@ for counter, replay-window, and delayed-message handling.
 
 For Noise Pipes, including the parser-valid
 `Noise_XXfallback_25519_ChaChaPoly_BLAKE2b` protocol, follow the complete
-[fallback example](noise-pipes.md). For unordered or lossy delivery, send
-`{nonce, ciphertext}` and use the
+[fallback example](noise-pipes.md). For unordered or lossy delivery, send the
+`{nonce, ciphertext}` returned by `Decibel.encrypt_with_nonce/3` and use the
 [bounded replay-window example](connectionless-transports.md); Decibel exposes
 nonce selection but the application owns replay rejection.
 
