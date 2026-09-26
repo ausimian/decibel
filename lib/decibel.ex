@@ -385,11 +385,11 @@ defmodule Decibel do
   """
   @spec handshake_encrypt(session(), iodata()) :: iodata()
   def handshake_encrypt(session, plaintext \\ []) do
-    {session, hs} = Session.fetch!(session, :handshake_encrypt, :handshake_write)
+    {slot, hs} = Session.fetch!(session, :handshake_encrypt, :handshake_write)
     validate_size!(plaintext, @max_message_size, "handshake plaintext")
     {hs, ciphertext} = Handshake.write_message(hs, plaintext)
     validate_size!(ciphertext, @max_message_size, "handshake message")
-    Session.store!(session, hs)
+    Session.store!(slot, hs)
     ciphertext
   end
 
@@ -412,10 +412,10 @@ defmodule Decibel do
   """
   @spec handshake_decrypt(session(), iodata()) :: iodata()
   def handshake_decrypt(session, ciphertext) do
-    {session, hs} = Session.fetch!(session, :handshake_decrypt, :handshake_read)
+    {slot, hs} = Session.fetch!(session, :handshake_decrypt, :handshake_read)
     validate_size!(ciphertext, @max_message_size, "handshake message")
     {hs, plaintext} = Handshake.read_message(hs, ciphertext)
-    Session.store!(session, hs)
+    Session.store!(slot, hs)
     plaintext
   end
 
@@ -428,8 +428,8 @@ defmodule Decibel do
   @spec handshake_complete?(session()) :: boolean()
   def handshake_complete?(session) do
     case Session.fetch!(session, :handshake_complete?, :any) do
-      {_session, %Handshake{}} -> false
-      {_session, %ChannelPair{}} -> true
+      {_slot, %Handshake{}} -> false
+      {_slot, %ChannelPair{}} -> true
     end
   end
 
@@ -483,8 +483,8 @@ defmodule Decibel do
   @spec handshake_hash(session()) :: handshake_hash() | nil
   def handshake_hash(session) do
     case Session.fetch!(session, :handshake_hash, :any) do
-      {_session, %Handshake{}} -> nil
-      {_session, %ChannelPair{} = cp} -> ChannelPair.get_hash(cp)
+      {_slot, %Handshake{}} -> nil
+      {_slot, %ChannelPair{} = cp} -> ChannelPair.get_hash(cp)
     end
   end
 
@@ -521,10 +521,7 @@ defmodule Decibel do
   """
   @spec encrypt(session(), iodata(), iodata()) :: iodata()
   def encrypt(session, plaintext, ad \\ []) do
-    {session, channel_pair} = Session.fetch!(session, :encrypt, :transport)
-    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
-    {channel_pair, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
-    Session.store!(session, channel_pair)
+    {_nonce, ciphertext} = seal!(session, :encrypt, plaintext, ad)
     ciphertext
   end
 
@@ -556,14 +553,7 @@ defmodule Decibel do
   """
   @spec encrypt_with_nonce(session(), iodata(), iodata()) :: {usable_nonce(), iodata()}
   def encrypt_with_nonce(session, plaintext, ad \\ []) do
-    {session, channel_pair} = Session.fetch!(session, :encrypt_with_nonce, :transport)
-    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
-
-    {channel_pair, nonce, ciphertext} =
-      ChannelPair.write_message_with_nonce(channel_pair, ad, plaintext)
-
-    Session.store!(session, channel_pair)
-    {nonce, ciphertext}
+    seal!(session, :encrypt_with_nonce, plaintext, ad)
   end
 
   @doc """
@@ -608,16 +598,17 @@ defmodule Decibel do
   """
   @spec decrypt(session(), iodata(), iodata(), [decrypt_option()]) :: iodata()
   def decrypt(session, ciphertext, ad \\ [], opts \\ []) do
-    {session, channel_pair} = Session.fetch!(session, :decrypt, :transport)
+    {slot, channel_pair} = Session.fetch!(session, :decrypt, :transport)
     validate_size!(ciphertext, @max_message_size, "transport message")
 
-    {channel_pair, plaintext} =
+    channel_pair =
       case validate_decrypt_options!(opts) do
-        {:ok, nonce} -> ChannelPair.read_message_at(channel_pair, nonce, ad, ciphertext)
-        :error -> ChannelPair.read_message(channel_pair, ad, ciphertext)
+        {:ok, nonce} -> ChannelPair.set_n(channel_pair, :in, nonce)
+        :error -> channel_pair
       end
 
-    Session.store!(session, channel_pair)
+    {channel_pair, plaintext} = ChannelPair.read_message(channel_pair, ad, ciphertext)
+    Session.store!(slot, channel_pair)
     plaintext
   end
 
@@ -661,9 +652,9 @@ defmodule Decibel do
   """
   @spec rekey(session(), :in | :out) :: :ok
   def rekey(session, dir) do
-    {session, channel_pair} = Session.fetch!(session, :rekey, :transport)
+    {slot, channel_pair} = Session.fetch!(session, :rekey, :transport)
     validate_direction!(dir)
-    Session.store!(session, ChannelPair.rekey(channel_pair, dir))
+    Session.store!(slot, ChannelPair.rekey(channel_pair, dir))
     :ok
   end
 
@@ -688,7 +679,7 @@ defmodule Decibel do
   """
   @spec nonce(session(), :in | :out) :: nonce()
   def nonce(session, dir) do
-    {_session, channel_pair} = Session.fetch!(session, :nonce, :transport)
+    {_slot, channel_pair} = Session.fetch!(session, :nonce, :transport)
     validate_direction!(dir)
     ChannelPair.get_n(channel_pair, dir)
   end
@@ -741,9 +732,9 @@ defmodule Decibel do
   """
   @spec set_nonce(session(), :in | :out, usable_nonce()) :: :ok
   def set_nonce(session, dir, n) do
-    {session, channel_pair} = Session.fetch!(session, :set_nonce, :transport)
+    {slot, channel_pair} = Session.fetch!(session, :set_nonce, :transport)
     validate_direction!(dir)
-    Session.store!(session, ChannelPair.set_n(channel_pair, dir, n))
+    Session.store!(slot, ChannelPair.set_n(channel_pair, dir, n))
     :ok
   end
 
@@ -759,7 +750,7 @@ defmodule Decibel do
   """
   @spec remote_key(session()) :: nil | binary()
   def remote_key(session) do
-    {_session, state} = Session.fetch!(session, :remote_key, :any)
+    {_slot, state} = Session.fetch!(session, :remote_key, :any)
     Map.get(state, :rs)
   end
 
@@ -782,6 +773,16 @@ defmodule Decibel do
 
   defp validate_direction!(direction) do
     raise ArgumentError, "direction must be :in or :out, got: #{inspect(direction)}"
+  end
+
+  # The shared body of encrypt/3 and encrypt_with_nonce/3; `operation` names the
+  # public call in session errors.
+  defp seal!(session, operation, plaintext, ad) do
+    {slot, channel_pair} = Session.fetch!(session, operation, :transport)
+    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
+    {channel_pair, nonce, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
+    Session.store!(slot, channel_pair)
+    {nonce, ciphertext}
   end
 
   defp validate_decrypt_options!(opts) do
