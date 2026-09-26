@@ -424,7 +424,9 @@ defmodule Decibel.SessionTest do
       deprecated_handshake_complete?: fn -> deprecated_call(:is_handshake_complete?, [session]) end,
       deprecated_handshake_hash: fn -> deprecated_call(:get_handshake_hash, [session]) end,
       encrypt: fn -> Decibel.encrypt(session, "plaintext") end,
+      encrypt_with_nonce: fn -> Decibel.encrypt_with_nonce(session, "plaintext") end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
+      decrypt_at_nonce: fn -> Decibel.decrypt(session, <<>>, [], nonce: 0) end,
       close: fn -> Decibel.close(session) end,
       rekey: fn -> Decibel.rekey(session, :out) end,
       nonce: fn -> Decibel.nonce(session, :out) end,
@@ -438,7 +440,9 @@ defmodule Decibel.SessionTest do
   defp transport_operations(session) do
     [
       encrypt: fn -> Decibel.encrypt(session, "plaintext") end,
+      encrypt_with_nonce: fn -> Decibel.encrypt_with_nonce(session, "plaintext") end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
+      decrypt: fn -> Decibel.decrypt(session, <<>>, [], nonce: 0) end,
       rekey: fn -> Decibel.rekey(session, :out) end,
       nonce: fn -> Decibel.nonce(session, :out) end,
       set_nonce: fn -> Decibel.set_nonce(session, :out, 0) end
