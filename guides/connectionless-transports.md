@@ -8,9 +8,10 @@ only the inbound operations shown below.
 
 > #### Danger: replay and nonce reuse {: .warning}
 >
-> A recipient using `Decibel.set_nonce/3` must track every nonce that decrypted
-> successfully and reject duplicates; otherwise an attacker can replay an
-> authenticated message. An outbound nonce must never be reused with the same
+> A recipient that selects inbound nonces, with the `:nonce` option of
+> `Decibel.decrypt/4` or with `Decibel.set_nonce/3`, must track every nonce
+> that decrypted successfully and reject duplicates; otherwise an attacker can
+> replay an authenticated message. An outbound nonce must never be reused with the same
 > key. `Decibel.ReplayWindow` provides the bookkeeping value, but the
 > application still owns, stores, and serializes it; Decibel does not hide
 > replay state in the session or provide a replay-protected decrypt operation.
@@ -20,19 +21,27 @@ Transfer `{nonce, ciphertext, aad}` between processes or peers, not either
 session handle. Each owner must serialize its session operations with updates
 to its application-owned replay window.
 
-A sender reads the nonce that `Decibel.encrypt/3` will consume and sends it
-alongside the ciphertext:
+A sender seals each message with `Decibel.encrypt_with_nonce/3`, which returns
+the nonce it consumed, and sends that nonce alongside the ciphertext:
 
 ```elixir
-nonce = Decibel.nonce(sender, :out)
-ciphertext = Decibel.encrypt(sender, plaintext, aad)
+{nonce, ciphertext} = Decibel.encrypt_with_nonce(sender, plaintext, aad)
 send(peer, {nonce, ciphertext})
 ```
+
+The recipient opens it at that nonce with
+`Decibel.decrypt(recipient, ciphertext, aad, nonce: nonce)`. Each side makes one
+session call per message.
+
+The nonce is an input to the AEAD, so a ciphertext authenticates only at the
+nonce it was sealed under, and the nonce need not be repeated in `aad`. A
+protocol that does bind the nonce into its associated data must know it before
+encrypting: read it with `Decibel.nonce/2`, then call `Decibel.encrypt/3`.
 
 Choose replay handling to match the transport:
 
 - Reliable, ordered transports use the cipher's implicit nonce progression and
-  need neither `Decibel.set_nonce/3` nor a replay window.
+  need neither explicit nonces nor a replay window.
 - Lossy, in-order transports can retain only the highest authenticated nonce,
   rejecting nonces at or below it and updating it only after successful
   decryption.
@@ -49,16 +58,17 @@ defmodule ConnectionlessExample do
   @moduledoc false
 
   def decrypt(ref, nonce, ciphertext, aad, window) do
-    with :ok <- Decibel.ReplayWindow.check(window, nonce),
-         :ok <- Decibel.set_nonce(ref, :in, nonce) do
-      try do
-        plaintext = Decibel.decrypt(ref, ciphertext, aad)
-        {:ok, plaintext, Decibel.ReplayWindow.commit(window, nonce)}
-      rescue
-        error in Decibel.DecryptionError -> {:error, error, window}
-      end
-    else
-      {:error, reason} -> {:error, reason, window}
+    case Decibel.ReplayWindow.check(window, nonce) do
+      :ok ->
+        try do
+          plaintext = Decibel.decrypt(ref, ciphertext, aad, nonce: nonce)
+          {:ok, plaintext, Decibel.ReplayWindow.commit(window, nonce)}
+        rescue
+          error in Decibel.DecryptionError -> {:error, error, window}
+        end
+
+      {:error, reason} ->
+        {:error, reason, window}
     end
   end
 end
@@ -77,9 +87,8 @@ recipient
 |> then(&Decibel.handshake_decrypt(sender, &1))
 
 window = Decibel.ReplayWindow.new()
-nonce = Decibel.nonce(sender, :out)
-aad = <<nonce::unsigned-little-64>>
-ciphertext = Decibel.encrypt(sender, "connectionless packet", aad)
+aad = "packet header"
+{nonce, ciphertext} = Decibel.encrypt_with_nonce(sender, "connectionless packet", aad)
 
 {:ok, plaintext, window} =
   decrypt_connectionless.(recipient, nonce, ciphertext, aad, window)
@@ -94,9 +103,9 @@ plaintext
 ```
 <!-- connectionless-example:end -->
 
-The window changes only after authentication succeeds. A failed ciphertext
-therefore does not prevent a later authentic packet with the same nonce from
-being tried.
+The window changes only after authentication succeeds, and a failed decryption
+leaves the session's inbound nonce unchanged. A failed ciphertext therefore does
+not prevent a later authentic packet with the same nonce from being tried.
 
 See the
 [nonce and rekeying guidance](security.md#nonces-replay-protection-and-rekeying)

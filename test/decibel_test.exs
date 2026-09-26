@@ -893,6 +893,7 @@ defmodule DecibelTest do
       assert IO.iodata_to_binary(plaintext) == Decibel.decrypt(rsp, ciphertext)
 
       assert_raise ArgumentError, fn -> Decibel.encrypt(ini, [plaintext, <<2>>]) end
+      assert_raise ArgumentError, fn -> Decibel.encrypt_with_nonce(ini, [plaintext, <<2>>]) end
 
       assert Decibel.nonce(ini, :out) == 1
       assert "after rejection" == Decibel.decrypt(rsp, Decibel.encrypt(ini, "after rejection"))
@@ -900,6 +901,7 @@ defmodule DecibelTest do
       ciphertext = Decibel.encrypt(ini, plaintext)
 
       assert_raise ArgumentError, fn -> Decibel.decrypt(rsp, [ciphertext, <<0>>]) end
+      assert_raise ArgumentError, fn -> Decibel.decrypt(rsp, [ciphertext, <<0>>], [], nonce: 2) end
 
       assert Decibel.nonce(rsp, :in) == 2
       assert IO.iodata_to_binary(plaintext) == Decibel.decrypt(rsp, ciphertext)

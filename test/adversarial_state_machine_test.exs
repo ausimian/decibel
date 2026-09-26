@@ -354,10 +354,12 @@ defmodule Decibel.AdversarialStateMachineTest do
 
     for {direction, operation} <- [
           {:in, fn -> Decibel.decrypt(initiator, <<>>) end},
+          {:in, fn -> Decibel.decrypt(initiator, <<>>, [], nonce: 0) end},
           {:in, fn -> Decibel.rekey(initiator, :in) end},
           {:in, fn -> Decibel.nonce(initiator, :in) end},
           {:in, fn -> Decibel.set_nonce(initiator, :in, 0) end},
           {:out, fn -> Decibel.encrypt(responder, <<>>) end},
+          {:out, fn -> Decibel.encrypt_with_nonce(responder, <<>>) end},
           {:out, fn -> Decibel.rekey(responder, :out) end},
           {:out, fn -> Decibel.nonce(responder, :out) end},
           {:out, fn -> Decibel.set_nonce(responder, :out, 0) end}
@@ -429,7 +431,9 @@ defmodule Decibel.AdversarialStateMachineTest do
   defp transport_operations(session) do
     [
       encrypt: fn -> Decibel.encrypt(session, <<>>) end,
+      encrypt_with_nonce: fn -> Decibel.encrypt_with_nonce(session, <<>>) end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
+      decrypt_at_nonce: fn -> Decibel.decrypt(session, <<>>, [], nonce: 0) end,
       rekey_in: fn -> Decibel.rekey(session, :in) end,
       rekey_out: fn -> Decibel.rekey(session, :out) end,
       nonce_in: fn -> Decibel.nonce(session, :in) end,
@@ -440,6 +444,7 @@ defmodule Decibel.AdversarialStateMachineTest do
     |> Enum.map(fn {operation, call} -> {canonical_operation(operation), call} end)
   end
 
+  defp canonical_operation(:decrypt_at_nonce), do: :decrypt
   defp canonical_operation(operation) when operation in [:rekey_in, :rekey_out], do: :rekey
   defp canonical_operation(operation) when operation in [:nonce_in, :nonce_out], do: :nonce
   defp canonical_operation(operation) when operation in [:set_nonce_in, :set_nonce_out], do: :set_nonce
@@ -489,7 +494,9 @@ defmodule Decibel.AdversarialStateMachineTest do
       deprecated_handshake_complete?: fn -> deprecated_call(:is_handshake_complete?, [session]) end,
       deprecated_handshake_hash: fn -> deprecated_call(:get_handshake_hash, [session]) end,
       encrypt: fn -> Decibel.encrypt(session, <<>>) end,
+      encrypt_with_nonce: fn -> Decibel.encrypt_with_nonce(session, <<>>) end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
+      decrypt_at_nonce: fn -> Decibel.decrypt(session, <<>>, [], nonce: 0) end,
       close: fn -> Decibel.close(session) end,
       rekey: fn -> Decibel.rekey(session, :out) end,
       nonce: fn -> Decibel.nonce(session, :out) end,

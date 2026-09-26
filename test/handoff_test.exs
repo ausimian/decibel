@@ -224,7 +224,9 @@ defmodule Decibel.HandoffTest do
       handshake_complete?: fn -> Decibel.handshake_complete?(session) end,
       handshake_hash: fn -> Decibel.handshake_hash(session) end,
       encrypt: fn -> Decibel.encrypt(session, "plaintext") end,
+      encrypt_with_nonce: fn -> Decibel.encrypt_with_nonce(session, "plaintext") end,
       decrypt: fn -> Decibel.decrypt(session, <<>>) end,
+      decrypt_at_nonce: fn -> Decibel.decrypt(session, <<>>, [], nonce: 0) end,
       rekey: fn -> Decibel.rekey(session, :out) end,
       nonce: fn -> Decibel.nonce(session, :out) end,
       set_nonce: fn -> Decibel.set_nonce(session, :out, 0) end,
@@ -239,7 +241,7 @@ defmodule Decibel.HandoffTest do
   end
 
   defp assert_all_closed(reasons) do
-    assert map_size(reasons) == 12
+    assert map_size(reasons) == 14
     assert reasons == Map.new(reasons, fn {operation, _reason} -> {operation, :closed} end)
   end
 

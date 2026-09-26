@@ -16,8 +16,9 @@ defmodule Decibel do
 
   Decibel has a direct, raising API. Operations that produce data return it
   directly: a session handle, ciphertext or plaintext, a boolean, a handshake
-  hash, a nonce, or a remote key. Operations whose only result is a state change
-  return `:ok`: `close/1`, `rekey/2`, and `set_nonce/3`.
+  hash, a nonce, or a remote key. `encrypt_with_nonce/3` returns the nonce it
+  used together with the ciphertext. Operations whose only result is a state
+  change return `:ok`: `close/1`, `rekey/2`, and `set_nonce/3`.
 
   Plaintext, associated data, and inbound Noise messages accept iodata. The
   message and payload return types are also iodata, so callers that need a
@@ -173,6 +174,12 @@ defmodule Decibel do
   'associated authenticated data' to be specified, that provides message-integrity
   assurance for the application data.
 
+  Protocols that carry an explicit nonce with each message use
+  `encrypt_with_nonce/3` to seal under the next outbound nonce and learn its
+  value, and the `:nonce` option of `decrypt/4` to open at a received nonce.
+  Each is a single session operation. See
+  [Connectionless Transports](connectionless-transports.md).
+
   Interactive handshake patterns allow both parties to encrypt and decrypt
   transport messages. For the one-way `N`, `K`, and `X` patterns, only the
   initiator may encrypt and only the responder may decrypt. Reverse-direction
@@ -227,6 +234,9 @@ defmodule Decibel do
 
   @typedoc "The role whose outbound channel uses the first split key."
   @type option :: {:swap, role()}
+
+  @typedoc "The inbound nonce at which `decrypt/4` opens a transport message."
+  @type decrypt_option :: {:nonce, usable_nonce()}
 
   @typedoc "An opaque, process-owned Noise session handle."
   @type session :: Decibel.Session.t()
@@ -519,6 +529,44 @@ defmodule Decibel do
   end
 
   @doc """
+  Encrypts a message under the next outbound nonce and returns that nonce with
+  the ciphertext.
+
+  Returns `{nonce, ciphertext}`, where `nonce` is the value this call consumed.
+  It is equivalent to reading `nonce(session, :out)` and then calling
+  `encrypt/3`, but it is a single session operation. Protocols that send the
+  nonce alongside each message, such as
+  [connectionless transports](connectionless-transports.md), should use it.
+
+  The application must provide
+  [framing and authenticated termination](security.md#framing-payloads-and-termination)
+  and follow the
+  [nonce and rekeying guidance](security.md#nonces-replay-protection-and-rekeying).
+
+  Raises `ArgumentError` if `plaintext` exceeds 65,519 bytes, the largest plaintext
+  that leaves room for the 16-byte authentication tag within a Noise message.
+  Raises `Decibel.TransportDirectionError` before any state change if outbound
+  transport is not permitted by a one-way handshake.
+  Raises `Decibel.NonceError` without changing state if the outbound channel's
+  nonce is exhausted.
+
+  Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
+  or use during the handshake raises `Decibel.SessionError` before any state
+  change.
+  """
+  @spec encrypt_with_nonce(session(), iodata(), iodata()) :: {usable_nonce(), iodata()}
+  def encrypt_with_nonce(session, plaintext, ad \\ []) do
+    {session, channel_pair} = Session.fetch!(session, :encrypt_with_nonce, :transport)
+    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
+
+    {channel_pair, nonce, ciphertext} =
+      ChannelPair.write_message_with_nonce(channel_pair, ad, plaintext)
+
+    Session.store!(session, channel_pair)
+    {nonce, ciphertext}
+  end
+
+  @doc """
   Decrypts a message over an established session, using an optionally
   provided AAD for message integrity.
 
@@ -534,15 +582,41 @@ defmodule Decibel do
   See [Failure handling](security.md#failure-handling) for the policy an application
   must apply to unauthenticated transport messages.
 
+  ## Options
+
+    * `:nonce` - decrypt at this inbound nonce, an integer from `0` through
+      `2^64 - 2`, instead of the channel's current one. After a successful
+      decryption the inbound nonce is the given value plus one, as with
+      `set_nonce/3` followed by `decrypt/3`, but in a single session
+      operation. On any failure the inbound nonce keeps its previous value.
+      Raises `Decibel.NonceError` with `reason: :out_of_range`, without
+      changing state, for a value outside the usable range.
+
+  > #### Danger: no replay protection {: .warning}
+  >
+  > Like `set_nonce/3`, the `:nonce` option does not provide replay
+  > protection. The application must reject every nonce that has already
+  > authenticated and record a nonce only after successful decryption. See
+  > [Connectionless Transports](connectionless-transports.md).
+
+  Raises `ArgumentError` if `opts` is not a keyword list, contains an
+  unsupported option, or repeats `:nonce`.
+
   Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
   or use during the handshake raises `Decibel.SessionError` before any state
   change.
   """
-  @spec decrypt(session(), iodata(), iodata()) :: iodata()
-  def decrypt(session, ciphertext, ad \\ []) do
+  @spec decrypt(session(), iodata(), iodata(), [decrypt_option()]) :: iodata()
+  def decrypt(session, ciphertext, ad \\ [], opts \\ []) do
     {session, channel_pair} = Session.fetch!(session, :decrypt, :transport)
     validate_size!(ciphertext, @max_message_size, "transport message")
-    {channel_pair, plaintext} = ChannelPair.read_message(channel_pair, ad, ciphertext)
+
+    {channel_pair, plaintext} =
+      case validate_decrypt_options!(opts) do
+        {:ok, nonce} -> ChannelPair.read_message_at(channel_pair, nonce, ad, ciphertext)
+        :error -> ChannelPair.read_message(channel_pair, ad, ciphertext)
+      end
+
     Session.store!(session, channel_pair)
     plaintext
   end
@@ -596,8 +670,8 @@ defmodule Decibel do
   @doc """
   Get the current nonce value of the specified cipher.
 
-  Connectionless senders should read the outbound nonce immediately before
-  calling `encrypt/3` and send that value with the ciphertext. See
+  Connectionless senders should use `encrypt_with_nonce/3`, which returns the
+  outbound nonce it consumed, and send that value with the ciphertext. See
   [Connectionless Transports](connectionless-transports.md) for the replay
   protection the recipient must provide, and
   [Nonces, replay protection, and rekeying](security.md#nonces-replay-protection-and-rekeying)
@@ -641,6 +715,10 @@ defmodule Decibel do
   > normally read outbound nonces with `nonce/2`; moving an outbound nonce
   > backwards is rejected because reusing a nonce with the same key is a
   > catastrophic AEAD failure.
+
+  To decrypt a message at a received inbound nonce, prefer the `:nonce`
+  option of `decrypt/4`, which selects the nonce and decrypts in one
+  operation.
 
   The nonce must be an integer from `0` through `2^64 - 2`.
 
@@ -704,6 +782,21 @@ defmodule Decibel do
 
   defp validate_direction!(direction) do
     raise ArgumentError, "direction must be :in or :out, got: #{inspect(direction)}"
+  end
+
+  defp validate_decrypt_options!(opts) do
+    Keyword.keyword?(opts) || raise ArgumentError, "options must be a keyword list"
+
+    case Enum.find(Keyword.keys(opts), &(&1 != :nonce)) do
+      nil -> :ok
+      key -> raise ArgumentError, "unsupported decrypt option: #{inspect(key)}"
+    end
+
+    if length(Keyword.get_values(opts, :nonce)) > 1 do
+      raise ArgumentError, "decrypt option :nonce may only be specified once"
+    end
+
+    Keyword.fetch(opts, :nonce)
   end
 
   defp validate_size!(data, maximum, description) do

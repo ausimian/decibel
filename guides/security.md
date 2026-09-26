@@ -118,8 +118,9 @@ discuss framing, truncation, extensible payloads, and padding.
 
 Never encrypt two messages under the same key and nonce. Decibel increments
 outbound nonces, rejects outbound rewinds, and raises `Decibel.NonceError`
-at exhaustion. For connectionless transport, `Decibel.set_nonce/3` selects an
-inbound nonce but does not provide replay protection. The application must
+at exhaustion. For connectionless transport, the `:nonce` option of
+`Decibel.decrypt/4` (or `Decibel.set_nonce/3`) selects an inbound nonce but
+does not provide replay protection. The application must
 retain a bounded replay window, reject every nonce that has already
 authenticated, and record a nonce only after successful decryption. See
 [Connectionless Transports](connectionless-transports.md) for a complete

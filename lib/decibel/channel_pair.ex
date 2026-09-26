@@ -27,11 +27,30 @@ defmodule Decibel.ChannelPair do
     {%__MODULE__{state | out: updated}, ciphertext}
   end
 
+  @spec write_message_with_nonce(__MODULE__.t(), iodata(), iodata()) ::
+          {__MODULE__.t(), Decibel.usable_nonce(), iodata()}
+  def write_message_with_nonce(%__MODULE__{out: nil}, _ad, _plaintext),
+    do: raise_direction_error(:out)
+
+  def write_message_with_nonce(%__MODULE__{out: %Cipher{n: n} = cout} = state, ad, plaintext) do
+    {updated, ciphertext} = Cipher.encrypt_with_aad(cout, ad, plaintext)
+    {%__MODULE__{state | out: updated}, n, ciphertext}
+  end
+
   @spec read_message(__MODULE__.t(), iodata(), iodata()) :: {__MODULE__.t(), iodata()}
   def read_message(%__MODULE__{in: nil}, _ad, _ciphertext), do: raise_direction_error(:in)
 
   def read_message(%__MODULE__{in: cin} = state, ad, ciphertext) do
     {updated, plaintext} = Cipher.decrypt_with_aad(cin, ad, ciphertext)
+    {%__MODULE__{state | in: updated}, plaintext}
+  end
+
+  @spec read_message_at(__MODULE__.t(), Decibel.usable_nonce(), iodata(), iodata()) ::
+          {__MODULE__.t(), iodata()}
+  def read_message_at(%__MODULE__{in: nil}, _n, _ad, _ciphertext), do: raise_direction_error(:in)
+
+  def read_message_at(%__MODULE__{in: cin} = state, n, ad, ciphertext) do
+    {updated, plaintext} = cin |> Cipher.set_nonce(n) |> Cipher.decrypt_with_aad(ad, ciphertext)
     {%__MODULE__{state | in: updated}, plaintext}
   end
 
