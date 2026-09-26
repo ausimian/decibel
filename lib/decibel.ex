@@ -521,10 +521,7 @@ defmodule Decibel do
   """
   @spec encrypt(session(), iodata(), iodata()) :: iodata()
   def encrypt(session, plaintext, ad \\ []) do
-    {slot, channel_pair} = Session.fetch!(session, :encrypt, :transport)
-    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
-    {channel_pair, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
-    Session.store!(slot, channel_pair)
+    {_nonce, ciphertext} = seal!(session, :encrypt, plaintext, ad)
     ciphertext
   end
 
@@ -556,14 +553,7 @@ defmodule Decibel do
   """
   @spec encrypt_with_nonce(session(), iodata(), iodata()) :: {usable_nonce(), iodata()}
   def encrypt_with_nonce(session, plaintext, ad \\ []) do
-    {slot, channel_pair} = Session.fetch!(session, :encrypt_with_nonce, :transport)
-    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
-
-    {channel_pair, nonce, ciphertext} =
-      ChannelPair.write_message_with_nonce(channel_pair, ad, plaintext)
-
-    Session.store!(slot, channel_pair)
-    {nonce, ciphertext}
+    seal!(session, :encrypt_with_nonce, plaintext, ad)
   end
 
   @doc """
@@ -611,12 +601,13 @@ defmodule Decibel do
     {slot, channel_pair} = Session.fetch!(session, :decrypt, :transport)
     validate_size!(ciphertext, @max_message_size, "transport message")
 
-    {channel_pair, plaintext} =
+    channel_pair =
       case validate_decrypt_options!(opts) do
-        {:ok, nonce} -> ChannelPair.read_message_at(channel_pair, nonce, ad, ciphertext)
-        :error -> ChannelPair.read_message(channel_pair, ad, ciphertext)
+        {:ok, nonce} -> ChannelPair.set_n(channel_pair, :in, nonce)
+        :error -> channel_pair
       end
 
+    {channel_pair, plaintext} = ChannelPair.read_message(channel_pair, ad, ciphertext)
     Session.store!(slot, channel_pair)
     plaintext
   end
@@ -782,6 +773,16 @@ defmodule Decibel do
 
   defp validate_direction!(direction) do
     raise ArgumentError, "direction must be :in or :out, got: #{inspect(direction)}"
+  end
+
+  # The shared body of encrypt/3 and encrypt_with_nonce/3; `operation` names the
+  # public call in session errors.
+  defp seal!(session, operation, plaintext, ad) do
+    {slot, channel_pair} = Session.fetch!(session, operation, :transport)
+    validate_size!(plaintext, @max_transport_plaintext_size, "transport plaintext")
+    {channel_pair, nonce, ciphertext} = ChannelPair.write_message(channel_pair, ad, plaintext)
+    Session.store!(slot, channel_pair)
+    {nonce, ciphertext}
   end
 
   defp validate_decrypt_options!(opts) do
