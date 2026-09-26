@@ -29,6 +29,7 @@ defmodule Decibel.Session do
 
   @type phase :: SessionError.phase()
   @typep state :: Handshake.t() | ChannelPair.t()
+  @typep slot :: {key :: {module(), reference()}, accepted? :: boolean()}
 
   @doc false
   @spec create(state()) :: t()
@@ -67,54 +68,48 @@ defmodule Decibel.Session do
     end
   end
 
+  # Each operation reads its session's storage once. fetch!/3 returns a slot
+  # holding the storage key and whether the entry records an accepted handoff,
+  # and store!/2 writes the new state back through that slot without reading
+  # the entry again. Nothing else touches the entry between the two calls,
+  # because an operation runs serially in the owner process.
   @doc false
-  @spec fetch!(term(), atom(), phase() | :any) :: {t(), state()}
+  @spec fetch!(term(), atom(), phase() | :any) :: {slot(), state()}
   def fetch!(session, operation, expected_phase) do
     validated = validate_handle!(session)
-
-    state =
-      validated
-      |> fetch_state!()
-      |> validate_phase!(operation, expected_phase)
-
-    {validated, state}
+    key = storage_key(validated)
+    {accepted?, state} = fetch_entry!(validated, key)
+    {{key, accepted?}, validate_phase!(state, operation, expected_phase)}
   end
 
   @doc false
-  @spec store!(t(), state()) :: state()
-  def store!(%__MODULE__{owner: owner} = session, state) when owner == self() do
-    entry =
-      case Process.get(storage_key(session), @missing) do
-        {@accepted, _previous_state} -> {@accepted, state}
-        _other -> state
-      end
-
-    Process.put(storage_key(session), entry)
+  @spec store!(slot(), state()) :: state()
+  def store!({key, accepted?}, state) do
+    Process.put(key, if(accepted?, do: {@accepted, state}, else: state))
     state
   end
 
   @doc false
   @spec close!(term()) :: :ok
   def close!(session) do
-    validated = validate_handle!(session)
-    _state = validated |> fetch_state!() |> validate_phase!(:close, :any)
-    Process.delete(storage_key(validated))
+    {{key, _accepted?}, _state} = fetch!(session, :close, :any)
+    Process.delete(key)
     :ok
   end
 
   @doc false
   @spec handoff!(term(), pid()) :: Decibel.Handoff.t()
   def handoff!(session, target) do
-    {validated, state} = fetch!(session, :handoff, :any)
+    {{key, accepted?}, state} = fetch!(session, :handoff, :any)
 
-    if match?({@accepted, _state}, Process.get(storage_key(validated), @missing)) do
+    if accepted? do
       raise SessionError, reason: :already_handed_off
     end
 
     validate_phase!(state, :handoff, :handshake)
     Decibel.Handoff.validate_target!(target)
     ticket = Decibel.Handoff.create(state, target)
-    Process.delete(storage_key(validated))
+    Process.delete(key)
     ticket
   end
 
@@ -132,13 +127,13 @@ defmodule Decibel.Session do
 
   defp validate_handle!(_session), do: raise(SessionError, reason: :unknown)
 
-  defp fetch_state!(session) do
-    case Process.get(storage_key(session), @missing) do
+  defp fetch_entry!(session, key) do
+    case Process.get(key, @missing) do
       @missing -> raise SessionError, reason: missing_reason(session)
-      %Handshake{} = state -> state
-      %ChannelPair{} = state -> state
-      {@accepted, %Handshake{} = state} -> state
-      {@accepted, %ChannelPair{} = state} -> state
+      %Handshake{} = state -> {false, state}
+      %ChannelPair{} = state -> {false, state}
+      {@accepted, %Handshake{} = state} -> {true, state}
+      {@accepted, %ChannelPair{} = state} -> {true, state}
       _invalid_state -> raise SessionError, reason: :unknown
     end
   end
