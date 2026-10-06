@@ -1,7 +1,10 @@
 defmodule Decibel.Handoff do
   @moduledoc """
-  An opaque, single-use ticket for transferring an in-progress handshake.
+  An opaque, single-use ticket for transferring session state to another
+  local process.
 
+  `Decibel.handoff/2` issues a ticket for an in-progress handshake, and
+  `Decibel.split/3` issues one for one direction of an established transport.
   A ticket contains no cryptographic state. The state is held by a short-lived
   process until its designated target accepts it, the target exits, or the
   ticket expires. Callers must not inspect, alter, or construct tickets.
@@ -11,7 +14,7 @@ defmodule Decibel.Handoff do
 
   use GenServer
 
-  alias Decibel.{HandoffError, Handshake}
+  alias Decibel.{ChannelPair, HandoffError, Handshake}
 
   @lifetime_ms 60_000
   @accept_timeout_ms @lifetime_ms + 5_000
@@ -32,15 +35,15 @@ defmodule Decibel.Handoff do
   end
 
   @doc false
-  @spec create(Decibel.Handshake.t(), pid()) :: t()
-  def create(handshake, target) do
+  @spec create(Handshake.t() | ChannelPair.t(), pid()) :: t()
+  def create(payload, target) do
     secret = make_ref()
-    {:ok, server} = GenServer.start(__MODULE__, {handshake, target, secret})
+    {:ok, server} = GenServer.start(__MODULE__, {payload, target, secret})
     %__MODULE__{server: server, secret: secret}
   end
 
   @doc false
-  @spec accept!(term()) :: Decibel.Handshake.t()
+  @spec accept!(term()) :: Handshake.t() | ChannelPair.t()
   def accept!(%__MODULE__{server: server, secret: secret})
       when is_pid(server) and is_reference(secret) do
     result =
@@ -55,6 +58,9 @@ defmodule Decibel.Handoff do
       {:ok, %Handshake{} = handshake} ->
         handshake
 
+      {:ok, %ChannelPair{} = channel_pair} ->
+        channel_pair
+
       {:error, reason} when reason in [:invalid_ticket, :not_target, :unavailable, :timeout] ->
         raise HandoffError, reason: reason
 
@@ -66,14 +72,14 @@ defmodule Decibel.Handoff do
   def accept!(_ticket), do: raise(HandoffError, reason: :invalid_ticket)
 
   @impl true
-  def init({handshake, target, secret}) do
+  def init({payload, target, secret}) do
     monitor = Process.monitor(target)
     timer = :erlang.start_timer(@lifetime_ms, self(), :expire)
     deadline = System.monotonic_time(:millisecond) + @lifetime_ms
 
     {:ok,
      %{
-       handshake: handshake,
+       payload: payload,
        target: target,
        secret: secret,
        monitor: monitor,
@@ -95,7 +101,7 @@ defmodule Decibel.Handoff do
         {:reply, {:error, :not_target}, state}
 
       true ->
-        {:stop, :normal, {:ok, state.handshake}, state}
+        {:stop, :normal, {:ok, state.payload}, state}
     end
   end
 

@@ -177,6 +177,22 @@ For Noise Pipes, including the parser-valid
 [bounded replay-window example](connectionless-transports.md); Decibel exposes
 nonce selection but the application owns replay rejection.
 
+### Separate sender and receiver processes
+
+After an interactive handshake completes, `Decibel.split/3` moves one
+transport direction to another local process, so one process can encrypt
+while another decrypts:
+
+```elixir
+ticket = Decibel.split(session, :in, reader_pid)
+# Deliver the ticket; reader_pid then calls:
+inbound = Decibel.accept_handoff(ticket)
+# session keeps only the outbound direction.
+```
+
+Each half is a separate session with its own owner, so the application decides
+how closing one half or the exit of its owner tears down the other.
+
 ### Ownership, cleanup, and errors
 
 Follow `m:Decibel#module-lifecycle` for session ownership and cleanup,
