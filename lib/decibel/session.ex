@@ -3,8 +3,9 @@ defmodule Decibel.Session do
   An opaque, process-owned Decibel session handle.
 
   Session handles may only be used by their owner process. An in-progress
-  handshake may be transferred once with `Decibel.handoff/2` and
-  `Decibel.accept_handoff/1`; acceptance creates a new handle for the target.
+  handshake may be transferred once with `Decibel.handoff/2`, and one direction
+  of an interactive transport may be moved with `Decibel.split/3`. In both
+  cases `Decibel.accept_handoff/1` creates a new handle for the target.
   Calls from another process raise `Decibel.SessionError` with
   `reason: :not_owner`, even after the owner closes the session or exits.
   Session state lives until `Decibel.close/1` is called or the owner process
@@ -37,11 +38,12 @@ defmodule Decibel.Session do
     create_entry(state)
   end
 
+  # Only an accepted handshake is marked, because only a handshake can be
+  # handed off; an accepted transport half may be split like any other.
   @doc false
-  @spec create_accepted(Handshake.t()) :: t()
-  def create_accepted(state) do
-    create_entry({@accepted, state})
-  end
+  @spec create_accepted(state()) :: t()
+  def create_accepted(%Handshake{} = state), do: create_entry({@accepted, state})
+  def create_accepted(%ChannelPair{} = state), do: create_entry(state)
 
   defp create_entry(entry) do
     session = %__MODULE__{owner: self(), id: make_ref(), seq: next_sequence()}
@@ -110,6 +112,24 @@ defmodule Decibel.Session do
     Decibel.Handoff.validate_target!(target)
     ticket = Decibel.Handoff.create(state, target)
     Process.delete(key)
+    ticket
+  end
+
+  # The owner keeps one half under its existing handle and the ticket carries
+  # the other, so each cipher has exactly one holder. Every check runs before
+  # the ticket is created and the owner's state is replaced.
+  @doc false
+  @spec split!(term(), :in | :out, pid()) :: Decibel.Handoff.t()
+  def split!(session, direction, target) do
+    {slot, state} = fetch!(session, :split, :transport)
+
+    direction in [:in, :out] ||
+      raise ArgumentError, "direction must be :in or :out, got: #{inspect(direction)}"
+
+    {kept, moved} = ChannelPair.split(state, direction)
+    Decibel.Handoff.validate_target!(target)
+    ticket = Decibel.Handoff.create(moved, target)
+    store!(slot, kept)
     ticket
   end
 

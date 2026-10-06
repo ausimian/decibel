@@ -1,6 +1,6 @@
 defmodule Decibel.HandoffError do
   @moduledoc """
-  Raised when a handshake handoff cannot be created or accepted.
+  Raised when a handoff or split ticket cannot be created or accepted.
 
   The `:reason` field is stable:
 
@@ -11,7 +11,7 @@ defmodule Decibel.HandoffError do
     its target exited.
   - `:timeout`: the ticket process did not respond before the acceptance deadline.
 
-  Errors contain no handshake state or key material.
+  Errors contain no session state or key material.
   """
 
   @type reason :: :invalid_target | :invalid_ticket | :not_target | :unavailable | :timeout

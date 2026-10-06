@@ -65,7 +65,7 @@ defmodule Decibel.Symmetric do
     {%__MODULE__{sym | h: mix_hash(hf, h, ciphertext), cs: cs}, plaintext}
   end
 
-  @spec split(__MODULE__.t(), ChannelPair.mode(), Decibel.role(), Decibel.role(), binary()) :: ChannelPair.t()
+  @spec split(__MODULE__.t(), ChannelPair.handshake_mode(), Decibel.role(), Decibel.role(), binary()) :: ChannelPair.t()
   def split(%__MODULE__{cs: cs, ck: ck, hf: hf, h: h}, mode, role, swap_role, rs) do
     {<<k1::32-bytes, _::binary>>, <<k2::32-bytes, _::binary>>} = Crypto.hkdf(hf, ck, <<>>, 2)
 
