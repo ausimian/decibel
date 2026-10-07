@@ -22,7 +22,7 @@ defmodule Decibel.Handshake do
     field(:hs, [Utility.handshake_message()], default: [])
     field(:buf, iodata(), default: [])
     field(:swap, Decibel.role())
-    field(:mode, ChannelPair.mode())
+    field(:mode, ChannelPair.handshake_mode())
   end
 
   @spec initialize(

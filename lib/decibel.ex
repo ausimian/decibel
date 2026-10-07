@@ -99,8 +99,9 @@ defmodule Decibel do
   pass the handle to a task, worker, or peer process, and do not call it
   concurrently. A `GenServer` or similar long-lived process can own a session
   and serialize all operations in its callbacks. If that process terminates,
-  its supervisor must establish a new session. The sole exception is an
-  explicit, one-time handoff while the handshake is still in progress.
+  its supervisor must establish a new session. There are two exceptions: an
+  explicit, one-time handoff while the handshake is still in progress, and an
+  explicit split of an established interactive transport.
 
   `handoff/2` returns a ticket to the current owner, which must deliver it to
   the designated local target process through its own messaging protocol. The
@@ -112,6 +113,18 @@ defmodule Decibel do
   target that exits after accepting also discards the session state it owns.
   Handoff is unavailable once transport begins; applications must transfer
   their own peer configuration, socket, and replay bookkeeping separately.
+
+  Once an interactive handshake completes, `split/3` moves one transport
+  direction to a designated local target through the same kind of ticket,
+  which the target accepts with `accept_handoff/1`. The original handle keeps
+  the other direction, so one process can encrypt while another decrypts
+  without sharing state. Each half is an ordinary session with its own owner
+  and lifetime: closing one half, or the exit of its owner, leaves the other
+  usable, and the application must decide how to tear down the remaining half.
+  Both halves report the same `handshake_hash/1` and `remote_key/1`. A
+  session accepted from a handoff can be split, but a half cannot be split
+  again. Replay bookkeeping for a connectionless transport belongs with the
+  inbound half.
 
   Using a structurally valid handle in another process raises `Decibel.SessionError` with
   `reason: :not_owner`, including when the owner has closed it or exited. This
@@ -186,6 +199,10 @@ defmodule Decibel do
   transport and cipher-management operations raise
   `Decibel.TransportDirectionError` without changing session state.
 
+  An interactive transport can be divided between two processes with
+  `split/3`, so that one process encrypts while another decrypts. See
+  [Ownership and lifetime](#module-ownership-and-lifetime).
+
   Each call encrypts or decrypts exactly one Noise transport message. Noise messages
   are limited to 65,535 bytes, so transport plaintexts are limited to 65,519 bytes
   after allowing for the 16-byte authentication tag. Applications must split and
@@ -241,7 +258,7 @@ defmodule Decibel do
   @typedoc "An opaque, process-owned Noise session handle."
   @type session :: Decibel.Session.t()
 
-  @typedoc "An opaque, single-use ticket for transferring an in-progress handshake."
+  @typedoc "An opaque, single-use ticket for transferring a handshake or a transport direction."
   @type handoff_ticket :: Decibel.Handoff.t()
 
   alias Decibel.{ChannelPair, Handoff, Handshake, Session}
@@ -341,10 +358,12 @@ defmodule Decibel do
   def handoff(session, target), do: Session.handoff!(session, target)
 
   @doc """
-  Accept a one-time handshake handoff in its designated target process.
+  Accept a handoff or split ticket in its designated target process.
 
-  Returns a new session handle owned by the caller, containing the same live
-  Noise handshake state and pending turn. The ticket cannot be claimed again.
+  Returns a new session handle owned by the caller. A `handoff/2` ticket gives
+  the same live Noise handshake state and pending turn; a `split/3` ticket
+  gives the single transport direction that was moved. The ticket cannot be
+  claimed again.
   An invalid ticket raises `Decibel.HandoffError` with `reason: :invalid_ticket`;
   a valid ticket used by another process uses `:not_target`; and an already
   claimed, expired, or abandoned ticket uses `:unavailable`. A stalled ticket
@@ -355,6 +374,44 @@ defmodule Decibel do
   """
   @spec accept_handoff(handoff_ticket()) :: session()
   def accept_handoff(ticket), do: ticket |> Handoff.accept!() |> Session.create_accepted()
+
+  @doc """
+  Move one direction of an established interactive transport to a live local
+  process.
+
+  `direction` is the channel to move: `:in` gives `target` the inbound channel
+  and leaves `session` outbound-only, and `:out` gives `target` the outbound
+  channel and leaves `session` inbound-only. The channel moves with its key and
+  current nonce, and exists only in the half that holds it, so no nonce can be
+  used twice under the same key.
+
+  Returns an opaque ticket. The current owner must deliver it to `target`
+  through its own messaging protocol, and `target` calls `accept_handoff/1` to
+  receive a session handle for the moved direction. The ticket follows the
+  same rules as a `handoff/2` ticket: only `target` can accept it, it can be
+  accepted once, and it is discarded if `target` exits or does not accept
+  within 60 seconds. A discarded ticket cannot restore the moved direction to
+  `session`.
+
+  Each half rejects operations on the direction it no longer holds by raising
+  `Decibel.TransportDirectionError` with `cause: :split`. Splitting a session
+  that was itself accepted from a handoff ticket is allowed.
+
+  Requires the `:transport` phase. Invalid ownership, closed or unknown
+  handles, and use during the handshake raise `Decibel.SessionError`. Raises
+  `ArgumentError` if `direction` is not `:in` or `:out`, or if the session has
+  only one direction because its handshake is one-way or it was already split.
+  An invalid, dead, or remote target raises `Decibel.HandoffError` with
+  `reason: :invalid_target`. A failed call leaves the session unchanged.
+
+      ticket = Decibel.split(session, :in, reader_pid)
+      GenServer.call(reader_pid, {:accept_noise_inbound, ticket})
+      # session is now outbound-only.
+
+  The target process should call `accept_handoff/1` in its callback.
+  """
+  @spec split(session(), :in | :out, pid()) :: handoff_ticket()
+  def split(session, direction, target), do: Session.split!(session, direction, target)
 
   @doc """
   Encrypt an outbound handshake message, optionally folding in application data.
@@ -511,7 +568,7 @@ defmodule Decibel do
   Raises `ArgumentError` if `plaintext` exceeds 65,519 bytes, the largest plaintext
   that leaves room for the 16-byte authentication tag within a Noise message.
   Raises `Decibel.TransportDirectionError` before any state change if outbound
-  transport is not permitted by a one-way handshake.
+  transport is not permitted by a one-way handshake or was moved by `split/3`.
   Raises `Decibel.NonceError` without changing state if the outbound channel's
   nonce is exhausted.
 
@@ -543,7 +600,7 @@ defmodule Decibel do
   Raises `ArgumentError` if `plaintext` exceeds 65,519 bytes, the largest plaintext
   that leaves room for the 16-byte authentication tag within a Noise message.
   Raises `Decibel.TransportDirectionError` before any state change if outbound
-  transport is not permitted by a one-way handshake.
+  transport is not permitted by a one-way handshake or was moved by `split/3`.
   Raises `Decibel.NonceError` without changing state if the outbound channel's
   nonce is exhausted.
 
@@ -565,7 +622,7 @@ defmodule Decibel do
   decrypted. The inbound state and nonce remain unchanged on either failure.
   Raises `ArgumentError` if the message exceeds 65,535 bytes.
   Raises `Decibel.TransportDirectionError` before any state change if inbound
-  transport is not permitted by a one-way handshake.
+  transport is not permitted by a one-way handshake or was moved by `split/3`.
   Raises `Decibel.NonceError` without changing state if the inbound channel's
   nonce is exhausted.
 
@@ -644,7 +701,8 @@ defmodule Decibel do
   for the application responsibilities around this operation.
 
   Raises `Decibel.TransportDirectionError` before any state change if the
-  selected direction is not permitted by a one-way handshake.
+  selected direction is not permitted by a one-way handshake or was moved by
+  `split/3`.
 
   Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
   or use during the handshake raises `Decibel.SessionError` before any state
@@ -672,7 +730,8 @@ defmodule Decibel do
   reserved value `2^64 - 1` to indicate that the channel is exhausted.
 
   Raises `Decibel.TransportDirectionError` before any state change if the
-  selected direction is not permitted by a one-way handshake.
+  selected direction is not permitted by a one-way handshake or was moved by
+  `split/3`.
 
   Requires the `:transport` phase. Invalid ownership, a closed/unknown handle,
   or use during the handshake raises `Decibel.SessionError`.
@@ -718,7 +777,8 @@ defmodule Decibel do
   leaves session state unchanged.
 
   Raises `Decibel.TransportDirectionError` before any state change if the
-  selected direction is not permitted by a one-way handshake.
+  selected direction is not permitted by a one-way handshake or was moved by
+  `split/3`.
   Raises `Decibel.NonceError` without changing state if the nonce is outside
   the usable range or would move the outbound channel backwards.
 
