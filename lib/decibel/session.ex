@@ -3,9 +3,10 @@ defmodule Decibel.Session do
   An opaque, process-owned Decibel session handle.
 
   Session handles may only be used by their owner process. An in-progress
-  handshake may be transferred once with `Decibel.handoff/2`, and one direction
-  of an interactive transport may be moved with `Decibel.split/3`. In both
-  cases `Decibel.accept_handoff/1` creates a new handle for the target.
+  handshake may be transferred once with `Decibel.handoff/2`, and the
+  directions of an interactive transport may be moved with `Decibel.split/3`
+  or `Decibel.split/2`. In each case `Decibel.accept_handoff/1` creates a new
+  handle for the target.
   Calls from another process raise `Decibel.SessionError` with
   `reason: :not_owner`, even after the owner closes the session or exits.
   Session state lives until `Decibel.close/1` is called or the owner process
@@ -131,6 +132,35 @@ defmodule Decibel.Session do
     ticket = Decibel.Handoff.create(moved, target)
     store!(slot, kept)
     ticket
+  end
+
+  # Both halves leave under tickets and the old handle is closed, so the
+  # owner keeps no key material. Both targets are validated before either
+  # ticket is created, so a failure strands no cipher in a ticket process.
+  @doc false
+  @spec split!(term(), %{in: pid(), out: pid()}) :: %{in: Decibel.Handoff.t(), out: Decibel.Handoff.t()}
+  def split!(session, targets) do
+    {{key, _accepted?}, state} = fetch!(session, :split, :transport)
+
+    case targets do
+      %{in: _, out: _} when map_size(targets) == 2 ->
+        :ok
+
+      _other ->
+        raise ArgumentError, "targets must be a map with exactly :in and :out keys, got: #{inspect(targets)}"
+    end
+
+    {outbound, inbound} = ChannelPair.split(state, :in)
+    Decibel.Handoff.validate_target!(targets.in)
+    Decibel.Handoff.validate_target!(targets.out)
+
+    tickets = %{
+      in: Decibel.Handoff.create(inbound, targets.in),
+      out: Decibel.Handoff.create(outbound, targets.out)
+    }
+
+    Process.delete(key)
+    tickets
   end
 
   defp validate_handle!(%__MODULE__{owner: owner, id: id} = session)

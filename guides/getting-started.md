@@ -193,6 +193,15 @@ inbound = Decibel.accept_handoff(ticket)
 Each half is a separate session with its own owner, so the application decides
 how closing one half or the exit of its owner tears down the other.
 
+`Decibel.split/2` moves both directions to other processes and closes the
+original session, so the process that completed the handshake keeps no key
+material:
+
+```elixir
+%{in: in_ticket, out: out_ticket} = Decibel.split(session, %{in: opener_pid, out: sealer_pid})
+# Deliver each ticket; opener_pid and sealer_pid each call accept_handoff/1.
+```
+
 ### Ownership, cleanup, and errors
 
 Follow `m:Decibel#module-lifecycle` for session ownership and cleanup,

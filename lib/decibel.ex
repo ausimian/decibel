@@ -126,6 +126,11 @@ defmodule Decibel do
   again. Replay bookkeeping for a connectionless transport belongs with the
   inbound half.
 
+  `split/2` moves both directions at once, each to its own target, and closes
+  the original handle. The process that completed the handshake then holds no
+  key material, so it can keep the handshakes and timers while other processes
+  encrypt and decrypt.
+
   Using a structurally valid handle in another process raises `Decibel.SessionError` with
   `reason: :not_owner`, including when the owner has closed it or exited. This
   classification uses the handle's owner PID alone by design; Decibel has no
@@ -199,8 +204,8 @@ defmodule Decibel do
   transport and cipher-management operations raise
   `Decibel.TransportDirectionError` without changing session state.
 
-  An interactive transport can be divided between two processes with
-  `split/3`, so that one process encrypts while another decrypts. See
+  An interactive transport can be divided between processes with `split/3` or
+  `split/2`, so that one process encrypts while another decrypts. See
   [Ownership and lifetime](#module-ownership-and-lifetime).
 
   Each call encrypts or decrypts exactly one Noise transport message. Noise messages
@@ -412,6 +417,42 @@ defmodule Decibel do
   """
   @spec split(session(), :in | :out, pid()) :: handoff_ticket()
   def split(session, direction, target), do: Session.split!(session, direction, target)
+
+  @doc """
+  Move both directions of an established interactive transport to live local
+  processes.
+
+  `targets` names the process for each channel: `targets.in` receives the
+  inbound channel and `targets.out` the outbound channel. Each channel moves
+  with its key and current nonce. The original handle is closed on success, so
+  the caller keeps no key material.
+
+  Returns a map with an `:in` and an `:out` ticket. The current owner must
+  deliver each ticket to its target through its own messaging protocol, and
+  each target calls `accept_handoff/1` to receive a session handle for its
+  direction. Each ticket follows the rules of a `split/3` ticket, and each
+  accepted half is the same kind of session that `split/3` produces. The
+  tickets are independent: if one is discarded, its direction is lost and the
+  other can still be accepted. Both targets may be the same process, which then
+  accepts two sessions.
+
+  Requires the `:transport` phase. Invalid ownership, closed or unknown
+  handles, and use during the handshake raise `Decibel.SessionError`. Raises
+  `ArgumentError` if `targets` is not a map with exactly the keys `:in` and
+  `:out`, or if the session has only one direction because its handshake is
+  one-way or it was already split. If either target is invalid, dead, or
+  remote, raises `Decibel.HandoffError` with `reason: :invalid_target` before
+  any ticket is created. A failed call leaves the session unchanged.
+
+      %{in: in_ticket, out: out_ticket} = Decibel.split(session, %{in: opener_pid, out: sealer_pid})
+      GenServer.call(opener_pid, {:accept_noise_inbound, in_ticket})
+      GenServer.call(sealer_pid, {:accept_noise_outbound, out_ticket})
+      # session is now closed.
+
+  Each target process should call `accept_handoff/1` in its callback.
+  """
+  @spec split(session(), %{in: pid(), out: pid()}) :: %{in: handoff_ticket(), out: handoff_ticket()}
+  def split(session, targets), do: Session.split!(session, targets)
 
   @doc """
   Encrypt an outbound handshake message, optionally folding in application data.
