@@ -3,8 +3,9 @@ defmodule Decibel.Handoff do
   An opaque, single-use ticket for transferring session state to another
   local process.
 
-  `Decibel.handoff/2` issues a ticket for an in-progress handshake, and
-  `Decibel.split/3` issues one for one direction of an established transport.
+  `Decibel.handoff/2` issues a ticket for an in-progress handshake.
+  `Decibel.split/3` issues one for one direction of an established transport,
+  and `Decibel.split/2` issues one for each direction.
   A ticket contains no cryptographic state. The state is held by a short-lived
   process until its designated target accepts it, the target exits, or the
   ticket expires. Callers must not inspect, alter, or construct tickets.

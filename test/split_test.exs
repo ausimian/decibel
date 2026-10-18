@@ -298,6 +298,201 @@ defmodule Decibel.SplitTest do
              TransportDirectionError.exception(direction: :out, cause: :split)
   end
 
+  test "splitting both directions moves each to its target and closes the original" do
+    {initiator, responder} = establish()
+    exchange(initiator, responder, 3)
+    {:ok, opener} = Holder.start_link()
+    {:ok, sealer} = Holder.start_link()
+    hash = Decibel.handshake_hash(responder)
+    remote_key = Decibel.remote_key(responder)
+    source_keys = Process.get_keys()
+
+    tickets = Decibel.split(responder, %{in: opener, out: sealer})
+    assert %{in: in_ticket, out: out_ticket} = tickets
+    assert Enum.sort(source_keys -- [{Decibel.Session, responder.id}]) == Enum.sort(Process.get_keys())
+    assert_session_error(fn -> Decibel.encrypt(responder, "closed") end, :closed)
+    assert_session_error(fn -> Decibel.split(responder, %{in: opener, out: sealer}) end, :closed)
+
+    assert {:raised, %HandoffError{reason: :not_target}} =
+             run(opener, fn _session -> Decibel.accept_handoff(out_ticket) end)
+
+    assert {:raised, %HandoffError{reason: :not_target}} =
+             run(sealer, fn _session -> Decibel.accept_handoff(in_ticket) end)
+
+    _inbound = GenServer.call(opener, {:accept, in_ticket})
+    _outbound = GenServer.call(sealer, {:accept, out_ticket})
+
+    ciphertext = Decibel.encrypt(initiator, "to opener")
+    assert {:ok, "to opener"} == run(opener, &Decibel.decrypt(&1, ciphertext))
+    assert {:ok, 4} == run(opener, &Decibel.nonce(&1, :in))
+
+    {:ok, {3, ciphertext}} = run(sealer, &Decibel.encrypt_with_nonce(&1, "from sealer"))
+    assert "from sealer" == Decibel.decrypt(initiator, ciphertext)
+
+    for holder <- [opener, sealer] do
+      assert {:ok, hash} == run(holder, &Decibel.handshake_hash/1)
+      assert {:ok, remote_key} == run(holder, &Decibel.remote_key/1)
+    end
+
+    assert {:raised, %TransportDirectionError{direction: :out, cause: :split}} =
+             run(opener, &Decibel.encrypt(&1, "wrong way"))
+
+    assert {:raised, %TransportDirectionError{direction: :in, cause: :split}} =
+             run(sealer, &Decibel.nonce(&1, :in))
+
+    for holder <- [opener, sealer] do
+      assert {:raised, %ArgumentError{message: "a split transport has only one direction and cannot be split again"}} =
+               run(holder, &Decibel.split(&1, %{in: opener, out: sealer}))
+    end
+
+    Decibel.close(initiator)
+    GenServer.stop(opener)
+    GenServer.stop(sealer)
+  end
+
+  test "both directions can move to the same process" do
+    {initiator, responder} = establish()
+    {:ok, holder} = Holder.start_link()
+
+    %{in: in_ticket, out: out_ticket} = Decibel.split(responder, %{in: holder, out: holder})
+    inbound = GenServer.call(holder, {:accept, in_ticket})
+    outbound = GenServer.call(holder, {:accept, out_ticket})
+    assert inbound != outbound
+
+    ciphertext = Decibel.encrypt(initiator, "inbound")
+    assert {:ok, "inbound"} == run(holder, fn _session -> Decibel.decrypt(inbound, ciphertext) end)
+    {:ok, ciphertext} = run(holder, fn _session -> Decibel.encrypt(outbound, "outbound") end)
+    assert "outbound" == Decibel.decrypt(initiator, ciphertext)
+
+    Decibel.close(initiator)
+    GenServer.stop(holder)
+  end
+
+  test "a session accepted from a handshake handoff can split both directions" do
+    initiator = Decibel.new(@protocol, :ini, %{s: keypair()})
+    responder = Decibel.new(@protocol, :rsp, %{s: keypair()})
+    assert "" == Decibel.handshake_decrypt(responder, Decibel.handshake_encrypt(initiator))
+
+    {:ok, owner} = Holder.start_link()
+    _accepted = GenServer.call(owner, {:accept, Decibel.handoff(responder, owner)})
+    {:ok, message} = run(owner, &Decibel.handshake_encrypt/1)
+    assert "" == Decibel.handshake_decrypt(initiator, message)
+    message = Decibel.handshake_encrypt(initiator)
+    assert {:ok, ""} == run(owner, &Decibel.handshake_decrypt(&1, message))
+
+    {:ok, opener} = Holder.start_link()
+    {:ok, sealer} = Holder.start_link()
+    {:ok, tickets} = run(owner, &Decibel.split(&1, %{in: opener, out: sealer}))
+    _inbound = GenServer.call(opener, {:accept, tickets.in})
+    _outbound = GenServer.call(sealer, {:accept, tickets.out})
+
+    assert {:raised, %SessionError{reason: :closed}} = run(owner, &Decibel.encrypt(&1, "closed"))
+
+    ciphertext = Decibel.encrypt(initiator, "after handoff")
+    assert {:ok, "after handoff"} == run(opener, &Decibel.decrypt(&1, ciphertext))
+    {:ok, ciphertext} = run(sealer, &Decibel.encrypt(&1, "after handoff"))
+    assert "after handoff" == Decibel.decrypt(initiator, ciphertext)
+
+    Decibel.close(initiator)
+    Enum.each([owner, opener, sealer], &GenServer.stop/1)
+  end
+
+  test "invalid splits of both directions raise, create no ticket, and leave the session intact" do
+    {initiator, responder} = establish()
+    target = self()
+    dead = spawn(fn -> :ok end)
+    monitor = Process.monitor(dead)
+    assert_receive {:DOWN, ^monitor, :process, ^dead, _reason}
+    tickets = ticket_processes()
+
+    task = Task.async(fn -> capture(fn -> Decibel.split(responder, %{in: target, out: target}) end) end)
+    assert %SessionError{reason: :not_owner} = Task.await(task)
+
+    for targets <- [
+          %{in: target},
+          %{out: target},
+          %{in: target, out: target, extra: target},
+          [in: target, out: target],
+          :both
+        ] do
+      message = "targets must be a map with exactly :in and :out keys, got: #{inspect(targets)}"
+      assert_raise ArgumentError, message, fn -> Decibel.split(responder, targets) end
+    end
+
+    for targets <- [
+          %{in: dead, out: target},
+          %{in: target, out: dead},
+          %{in: :not_a_pid, out: target},
+          %{in: target, out: :not_a_pid}
+        ] do
+      assert_handoff_error(fn -> Decibel.split(responder, targets) end, :invalid_target)
+    end
+
+    assert MapSet.subset?(ticket_processes(), tickets)
+    assert "intact" == Decibel.decrypt(responder, Decibel.encrypt(initiator, "intact"))
+    assert "intact" == Decibel.decrypt(initiator, Decibel.encrypt(responder, "intact"))
+
+    close_all([initiator, responder])
+  end
+
+  test "splitting both directions during the handshake raises wrong_phase" do
+    initiator = Decibel.new(@protocol, :ini, %{s: keypair()})
+
+    error = assert_session_error(fn -> Decibel.split(initiator, %{in: self(), out: self()}) end, :wrong_phase)
+    assert error.operation == :split
+    assert error.expected_phase == :transport
+    assert error.actual_phase == :handshake_write
+
+    Decibel.close(initiator)
+  end
+
+  test "one-way transports and split halves cannot split both directions" do
+    {responder_public, _private} = responder_static = keypair()
+    initiator = Decibel.new("Noise_N_25519_ChaChaPoly_BLAKE2s", :ini, %{rs: responder_public})
+    responder = Decibel.new("Noise_N_25519_ChaChaPoly_BLAKE2s", :rsp, %{s: responder_static})
+    assert "" == Decibel.handshake_decrypt(responder, Decibel.handshake_encrypt(initiator))
+
+    for session <- [initiator, responder] do
+      assert_raise ArgumentError, "a one-way transport has only one direction and cannot be split", fn ->
+        Decibel.split(session, %{in: self(), out: self()})
+      end
+    end
+
+    assert "one way" == Decibel.decrypt(responder, Decibel.encrypt(initiator, "one way"))
+    close_all([initiator, responder])
+
+    {initiator, responder} = establish()
+    {:ok, reader} = Holder.start_link()
+    _inbound = GenServer.call(reader, {:accept, Decibel.split(responder, :in, reader)})
+
+    assert_raise ArgumentError, "a split transport has only one direction and cannot be split again", fn ->
+      Decibel.split(responder, %{in: self(), out: self()})
+    end
+
+    assert "kept" == Decibel.decrypt(initiator, Decibel.encrypt(responder, "kept"))
+    close_all([initiator, responder])
+    GenServer.stop(reader)
+  end
+
+  test "a discarded ticket loses only its own direction" do
+    {initiator, responder} = establish()
+    target = spawn(fn -> receive do: (:stop -> :ok) end)
+    {:ok, sealer} = Holder.start_link()
+
+    %{in: in_ticket, out: out_ticket} = Decibel.split(responder, %{in: target, out: sealer})
+    monitor = Process.monitor(in_ticket.server)
+    send(target, :stop)
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}
+    assert_handoff_error(fn -> Decibel.accept_handoff(in_ticket) end, :unavailable)
+
+    _outbound = GenServer.call(sealer, {:accept, out_ticket})
+    {:ok, ciphertext} = run(sealer, &Decibel.encrypt(&1, "still sealing"))
+    assert "still sealing" == Decibel.decrypt(initiator, ciphertext)
+
+    Decibel.close(initiator)
+    GenServer.stop(sealer)
+  end
+
   defp establish do
     initiator = Decibel.new(@protocol, :ini, %{s: keypair()})
     responder = Decibel.new(@protocol, :rsp, %{s: keypair()})
@@ -312,6 +507,14 @@ defmodule Decibel.SplitTest do
       assert "#{i}" == Decibel.decrypt(responder, Decibel.encrypt(initiator, "#{i}"))
       assert "#{i}" == Decibel.decrypt(initiator, Decibel.encrypt(responder, "#{i}"))
     end
+  end
+
+  defp ticket_processes do
+    for pid <- Process.list(),
+        {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
+        dictionary[:"$initial_call"] == {Decibel.Handoff, :init, 1},
+        into: MapSet.new(),
+        do: pid
   end
 
   defp keypair, do: :crypto.generate_key(:ecdh, :x25519)
