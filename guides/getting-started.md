@@ -8,7 +8,7 @@ in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:decibel, "~> 1.0"}
+    {:decibel, "~> 1.4"}
   ]
 end
 ```
