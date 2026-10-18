@@ -2,6 +2,15 @@
 
 <!-- %% CHANGELOG_ENTRIES %% -->
 
+## 1.4.0 - 2026-10-18
+
+### Added
+
+- Add `Decibel.split/2`, which moves both directions of an established
+  interactive transport to other local processes in one operation and closes
+  the original session. The process that completed the handshake no longer
+  has to keep one direction.
+
 ## 1.3.0 - 2026-10-07
 
 ### Added
